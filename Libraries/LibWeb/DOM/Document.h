@@ -301,8 +301,6 @@ public:
 
     virtual FlyString node_name() const override { return "#document"_fly_string; }
 
-    void invalidate_style_for_elements_affected_by_pseudo_class_change(CSS::PseudoClass, auto& element_slot, Node& old_new_common_ancestor, auto node);
-
     void set_hovered_node(GC::Ptr<Node>);
     Node* hovered_node() { return m_hovered_node.ptr(); }
     Node const* hovered_node() const { return m_hovered_node.ptr(); }
@@ -1080,7 +1078,7 @@ public:
     String dump_display_list();
     String dump_stacking_context_tree();
 
-    StyleInvalidator& style_invalidator() { return m_style_invalidator; }
+    CSS::Invalidation::StyleInvalidator& style_invalidator() { return m_style_invalidator; }
 
     Optional<Vector<CSS::Parser::ComponentValue>> environment_variable_value(CSS::EnvironmentVariable, Span<i32> indices = {}) const;
 
@@ -1544,7 +1542,7 @@ private:
     // https://drafts.csswg.org/css-view-transitions-1/#document-update-callback-queue
     Vector<GC::Ptr<ViewTransition::ViewTransition>> m_update_callback_queue = {};
 
-    GC::Ref<StyleInvalidator> m_style_invalidator;
+    GC::Ref<CSS::Invalidation::StyleInvalidator> m_style_invalidator;
 
     // https://www.w3.org/TR/css-properties-values-api-1/#dom-window-registeredpropertyset-slot
     HashMap<FlyString, CSS::CustomPropertyRegistration> m_registered_property_set;
