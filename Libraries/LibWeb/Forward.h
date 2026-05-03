@@ -206,6 +206,7 @@ struct PasswordCredentialData;
 namespace Web::Crypto {
 
 class Crypto;
+class CryptoKey;
 class SubtleCrypto;
 
 }
@@ -508,6 +509,7 @@ namespace Web::CSS::Parser {
 class ComponentValue;
 class GuardedSubstitutionContexts;
 class Parser;
+class RustTokenizer;
 class SyntaxNode;
 class Token;
 class Tokenizer;
