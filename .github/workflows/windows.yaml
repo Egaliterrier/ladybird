@@ -85,8 +85,6 @@ jobs:
             -DLADYBIRD_GUI_FRAMEWORK=Qt `
             -DCMAKE_LINKER_TYPE=lld `
             -DENABLE_LTO_FOR_RELEASE=OFF `
-            -DCMAKE_UNITY_BUILD=ON `
-            -DCMAKE_UNITY_BUILD_BATCH_SIZE=16
 
       - name: Build
         shell: pwsh
