@@ -84,7 +84,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang-cl `
             -DLADYBIRD_GUI_FRAMEWORK=Qt `
             -DCMAKE_LINKER_TYPE=lld `
-            -DENABLE_LTO_FOR_RELEASE=OFF `
+            -DENABLE_LTO_FOR_RELEASE=OFF
 
       - name: Build
         shell: pwsh
@@ -110,13 +110,14 @@ jobs:
           }
           $deployTool = Get-ChildItem -Path "Build/release/vcpkg_installed" -Filter "windeployqt.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
           if (!$deployTool) { exit 1 }
-          $env:PATH = "$(Resolve-Path "Build/release/vcpkg_installed/x64-windows/bin");" + $env:PATH
-          & $deployTool --dir "$pkgDir/bin" --no-translations --compiler-runtime
+          $ladybirdExe = "$pkgDir/bin/Ladybird.exe"
+          if (!(Test-Path $ladybirdExe)) { exit 1 }
+          & $deployTool --no-translations --compiler-runtime --ignore-library-errors --dir "$pkgDir/bin" "$ladybirdExe"
           Remove-Item -Path "$pkgDir/bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination "$pkgDir/LICENSE.txt" }
           "Commit: ${{ github.sha }}`nBuild Date: $(Get-Date)" | Out-File -FilePath "$pkgDir/version.txt"
 
-          # Simple updater script – no here‑string, safe for YAML
+          # Updater script – YAML‑safe, no here‑string
           $updater = @(
             '<# :',
             '@echo off',
@@ -158,8 +159,8 @@ jobs:
           path: ladybird-windows-x64.zip
           retention-days: 14
 
-      - name: Validate Build (master only)
-        if: success() && github.ref == 'refs/heads/master'
+      - name: Validate Build
+        if: success()
         shell: pwsh
         run: |
           $binDir = "${{ github.workspace }}/ladybird-package/Ladybird/bin"
