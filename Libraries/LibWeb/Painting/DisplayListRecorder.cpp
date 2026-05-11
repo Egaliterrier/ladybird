@@ -94,19 +94,80 @@ private:
     Vector<u8> m_inline_payload;
 };
 
-static DisplayListColorInterpolationMethod to_display_list_color_interpolation_method(
+static Gfx::RectangularColorSpace to_gfx_rectangular_color_space(CSS::RectangularColorSpace color_space)
+{
+    switch (color_space) {
+    case CSS::RectangularColorSpace::Srgb:
+        return Gfx::RectangularColorSpace::Srgb;
+    case CSS::RectangularColorSpace::SrgbLinear:
+        return Gfx::RectangularColorSpace::SrgbLinear;
+    case CSS::RectangularColorSpace::DisplayP3:
+        return Gfx::RectangularColorSpace::DisplayP3;
+    case CSS::RectangularColorSpace::DisplayP3Linear:
+        return Gfx::RectangularColorSpace::DisplayP3Linear;
+    case CSS::RectangularColorSpace::A98Rgb:
+        return Gfx::RectangularColorSpace::A98Rgb;
+    case CSS::RectangularColorSpace::ProphotoRgb:
+        return Gfx::RectangularColorSpace::ProphotoRgb;
+    case CSS::RectangularColorSpace::Rec2020:
+        return Gfx::RectangularColorSpace::Rec2020;
+    case CSS::RectangularColorSpace::Lab:
+        return Gfx::RectangularColorSpace::Lab;
+    case CSS::RectangularColorSpace::Oklab:
+        return Gfx::RectangularColorSpace::Oklab;
+    case CSS::RectangularColorSpace::Xyz:
+        return Gfx::RectangularColorSpace::Xyz;
+    case CSS::RectangularColorSpace::XyzD50:
+        return Gfx::RectangularColorSpace::XyzD50;
+    case CSS::RectangularColorSpace::XyzD65:
+        return Gfx::RectangularColorSpace::XyzD65;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+static Gfx::PolarColorSpace to_gfx_polar_color_space(CSS::PolarColorSpace color_space)
+{
+    switch (color_space) {
+    case CSS::PolarColorSpace::Hsl:
+        return Gfx::PolarColorSpace::Hsl;
+    case CSS::PolarColorSpace::Hwb:
+        return Gfx::PolarColorSpace::Hwb;
+    case CSS::PolarColorSpace::Lch:
+        return Gfx::PolarColorSpace::Lch;
+    case CSS::PolarColorSpace::Oklch:
+        return Gfx::PolarColorSpace::Oklch;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+static Gfx::HueInterpolationMethod to_gfx_hue_interpolation_method(CSS::HueInterpolationMethod hue_interpolation_method)
+{
+    switch (hue_interpolation_method) {
+    case CSS::HueInterpolationMethod::Shorter:
+        return Gfx::HueInterpolationMethod::Shorter;
+    case CSS::HueInterpolationMethod::Longer:
+        return Gfx::HueInterpolationMethod::Longer;
+    case CSS::HueInterpolationMethod::Increasing:
+        return Gfx::HueInterpolationMethod::Increasing;
+    case CSS::HueInterpolationMethod::Decreasing:
+        return Gfx::HueInterpolationMethod::Decreasing;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+static Gfx::GradientInterpolationMethod to_display_list_color_interpolation_method(
     CSS::ColorInterpolationMethodStyleValue::ColorInterpolationMethod const& interpolation_method)
 {
-    DisplayListColorInterpolationMethod result;
+    Gfx::GradientInterpolationMethod result;
     interpolation_method.visit(
         [&](CSS::RectangularColorSpace color_space) {
-            result.type = DisplayListColorInterpolationMethod::Type::Rectangular;
-            result.rectangular_color_space = color_space;
+            result.type = Gfx::GradientInterpolationMethod::Type::Rectangular;
+            result.rectangular_color_space = to_gfx_rectangular_color_space(color_space);
         },
         [&](CSS::ColorInterpolationMethodStyleValue::PolarColorInterpolationMethod const& color_space) {
-            result.type = DisplayListColorInterpolationMethod::Type::Polar;
-            result.polar_color_space = color_space.color_space;
-            result.hue_interpolation_method = color_space.hue_interpolation_method;
+            result.type = Gfx::GradientInterpolationMethod::Type::Polar;
+            result.polar_color_space = to_gfx_polar_color_space(color_space.color_space);
+            result.hue_interpolation_method = to_gfx_hue_interpolation_method(color_space.hue_interpolation_method);
         });
     return result;
 }
@@ -196,6 +257,18 @@ static DisplayListDataSpan append_path_data(CommandPayloadBuilder<Command>& payl
 {
     auto path_data = path.serialize_to_bytes();
     return payload_builder.append_data(path_data.span(), alignof(u32));
+}
+
+template<DisplayListCommand Command>
+static DisplayListDataSpan append_filter_data(
+    CommandPayloadBuilder<Command>& payload_builder,
+    DisplayListResourceStorage& resource_storage,
+    Gfx::Filter const& filter)
+{
+    auto filter_data = Gfx::serialize_filter(filter, [&](Gfx::DecodedImageFrame const& frame) {
+        return resource_storage.add_image_frame(frame).value();
+    });
+    return payload_builder.append_data(filter_data, alignof(u32));
 }
 
 void DisplayListRecorder::replay_cached_commands(DisplayListCommandSequence const& commands)
@@ -555,12 +628,16 @@ void DisplayListRecorder::apply_backdrop_filter(Gfx::IntRect const& backdrop_reg
 {
     if (backdrop_region.is_empty())
         return;
-    append_command(ApplyBackdropFilter {
-        .backdrop_region = backdrop_region,
-        .corner_radii = corner_radii,
-        .has_backdrop_filter = true,
-        .backdrop_filter_id = resource_storage().add_filter(backdrop_filter),
-    });
+    CommandPayloadBuilder<ApplyBackdropFilter> payload_builder(m_display_list);
+    auto filter_data = append_filter_data(payload_builder, resource_storage(), backdrop_filter);
+    append_command(
+        ApplyBackdropFilter {
+            .backdrop_region = backdrop_region,
+            .corner_radii = corner_radii,
+            .has_backdrop_filter = true,
+            .backdrop_filter_data = filter_data,
+        },
+        payload_builder.inline_data());
 }
 
 void DisplayListRecorder::paint_outer_box_shadow(PaintOuterBoxShadow outer_box_shadow)
@@ -637,13 +714,19 @@ void DisplayListRecorder::paint_scrollbar(ScrollFrameIndex scroll_frame_index, G
 
 void DisplayListRecorder::apply_effects(float opacity, Gfx::CompositingAndBlendingOperator compositing_and_blending_operator, Optional<Gfx::Filter> filter, Optional<Gfx::MaskKind> mask_kind)
 {
-    append_command(ApplyEffects {
-        .opacity = opacity,
-        .compositing_and_blending_operator = compositing_and_blending_operator,
-        .has_filter = filter.has_value(),
-        .filter_id = filter.has_value() ? resource_storage().add_filter(filter.value()) : FilterResourceId {},
-        .has_mask_kind = mask_kind.has_value(),
-        .mask_kind = mask_kind.value_or({}) });
+    CommandPayloadBuilder<ApplyEffects> payload_builder(m_display_list);
+    auto filter_data = filter.has_value()
+        ? append_filter_data(payload_builder, resource_storage(), filter.value())
+        : DisplayListDataSpan {};
+    append_command(
+        ApplyEffects {
+            .opacity = opacity,
+            .compositing_and_blending_operator = compositing_and_blending_operator,
+            .has_filter = filter.has_value(),
+            .filter_data = filter_data,
+            .has_mask_kind = mask_kind.has_value(),
+            .mask_kind = mask_kind.value_or({}) },
+        payload_builder.inline_data());
 }
 
 }
