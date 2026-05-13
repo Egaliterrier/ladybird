@@ -7,9 +7,9 @@
 #pragma once
 
 #include <AK/Atomic.h>
-#include <AK/AtomicRefCounted.h>
 #include <AK/Forward.h>
 #include <AK/NonnullRefPtr.h>
+#include <AK/Optional.h>
 #include <AK/Queue.h>
 #include <AK/Time.h>
 #include <LibCore/Forward.h>
@@ -17,6 +17,7 @@
 #include <LibMedia/Export.h>
 #include <LibMedia/Forward.h>
 #include <LibMedia/IncrementallyPopulatedStream.h>
+#include <LibMedia/Producers/VideoProducer.h>
 #include <LibMedia/SeekMode.h>
 #include <LibMedia/TimeRanges.h>
 #include <LibMedia/Track.h>
@@ -26,7 +27,7 @@
 namespace Media {
 
 // Retrieves coded data from a demuxer and decodes it asynchronously into video frames ready for display.
-class MEDIA_API VideoDataProvider final : public AtomicRefCounted<VideoDataProvider> {
+class MEDIA_API DecodedVideoProducer : public VideoProducer {
     class ThreadData;
 
 public:
@@ -35,27 +36,24 @@ public:
 
     using ErrorHandler = Function<void(DecoderError&&)>;
     using FrameEndTimeHandler = Function<void(AK::Duration)>;
-    using SeekCompletionHandler = Function<void(AK::Duration)>;
-    using FramesQueueIsFullHandler = Function<void()>;
 
-    static DecoderErrorOr<NonnullRefPtr<VideoDataProvider>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const&, Track const&, RefPtr<MediaTimeProvider> const& = nullptr);
+    static DecoderErrorOr<NonnullRefPtr<DecodedVideoProducer>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const&, Track const&, RefPtr<MediaTimeProvider> const& = nullptr);
 
-    VideoDataProvider(NonnullRefPtr<ThreadData> const&);
-    ~VideoDataProvider();
+    DecodedVideoProducer(NonnullRefPtr<ThreadData> const&);
+    ~DecodedVideoProducer();
 
     void set_error_handler(ErrorHandler&&);
     void set_duration_change_handler(FrameEndTimeHandler&&);
-    void set_frames_queue_is_full_handler(FramesQueueIsFullHandler&&);
 
-    void start();
+    virtual void start() override;
     void suspend();
     void resume();
 
-    RefPtr<VideoFrame> retrieve_frame();
+    virtual PipelineStatus pull(RefPtr<VideoFrame>& into) override;
+    virtual void set_state_changed_handler(PipelineStateChangeHandler) override;
 
-    void seek(AK::Duration timestamp, SeekMode, SeekCompletionHandler&& = nullptr);
-
-    bool is_blocked() const;
+    AK::Duration select_fast_seek_target(AK::Duration timestamp, SeekMode);
+    virtual void seek(AK::Duration timestamp) override;
 
     TimeRanges buffered_time_ranges() const;
 
@@ -67,7 +65,7 @@ private:
 
         void set_error_handler(ErrorHandler&&);
         void set_duration_change_handler(FrameEndTimeHandler&&);
-        void set_frames_queue_is_full_handler(FramesQueueIsFullHandler&&);
+        void set_state_changed_handler(PipelineStateChangeHandler);
 
         void start();
         DecoderErrorOr<void> create_decoder();
@@ -76,9 +74,11 @@ private:
         void exit();
 
         FrameQueue& queue();
-        NonnullRefPtr<VideoFrame> take_frame();
 
-        void seek(AK::Duration timestamp, SeekMode, SeekCompletionHandler&&);
+        PipelineStatus pull(RefPtr<VideoFrame>& into);
+
+        void seek(AK::Duration timestamp);
+        AK::Duration select_fast_seek_target(AK::Duration target, SeekMode) const;
 
         void wait_for_start();
         bool should_thread_exit_while_locked() const;
@@ -92,11 +92,12 @@ private:
         void queue_frame(NonnullRefPtr<VideoFrame> const&);
         void dispatch_error(DecoderError&&);
         bool handle_seek();
-        template<typename Callback>
-        void process_seek_on_main_thread(u32 seek_id, Callback);
-        void resolve_seek(u32 seek_id, AK::Duration const& timestamp);
+        void resolve_seek(u32 seek_id);
         void push_data_and_decode_some_frames();
-        bool is_blocked() const;
+
+        void enter_halting_state(PipelineStatus, Optional<DecoderError>);
+
+        void dispatch_state_if_changed_while_locked(PipelineStatus);
 
         TimeRanges buffered_time_ranges() const;
 
@@ -129,14 +130,14 @@ private:
         FrameQueue m_queue;
         FrameEndTimeHandler m_duration_change_handler;
         ErrorHandler m_error_handler;
-        bool m_is_in_error_state { false };
-        FramesQueueIsFullHandler m_frames_queue_is_full_handler;
+        PipelineStatus m_pending_halting_status { PipelineStatus::Pending };
 
         u32 m_last_processed_seek_id { 0 };
         Atomic<u32> m_seek_id { 0 };
-        SeekCompletionHandler m_seek_completion_handler;
         AK::Duration m_seek_timestamp;
-        SeekMode m_seek_mode { SeekMode::Accurate };
+
+        PipelineStateChangeHandler m_state_changed_handler;
+        PipelineStatus m_last_dispatched_status { PipelineStatus::Pending };
     };
 
     NonnullRefPtr<ThreadData> m_thread_data;

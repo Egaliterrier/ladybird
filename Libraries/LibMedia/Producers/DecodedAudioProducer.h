@@ -6,9 +6,9 @@
 
 #pragma once
 
-#include <AK/AtomicRefCounted.h>
 #include <AK/NonnullOwnPtr.h>
 #include <AK/NonnullRefPtr.h>
+#include <AK/Optional.h>
 #include <AK/Queue.h>
 #include <AK/Time.h>
 #include <LibCore/Forward.h>
@@ -18,6 +18,7 @@
 #include <LibMedia/Export.h>
 #include <LibMedia/Forward.h>
 #include <LibMedia/IncrementallyPopulatedStream.h>
+#include <LibMedia/Producers/AudioProducer.h>
 #include <LibMedia/TimeRanges.h>
 #include <LibMedia/Track.h>
 #include <LibSync/ConditionVariable.h>
@@ -27,7 +28,7 @@
 namespace Media {
 
 // Retrieves coded data from a demuxer and decodes it asynchronously into audio samples to push to an AudioSink.
-class MEDIA_API AudioDataProvider : public AtomicRefCounted<AudioDataProvider> {
+class MEDIA_API DecodedAudioProducer final : public AudioProducer {
     class ThreadData;
 
 public:
@@ -36,28 +37,23 @@ public:
 
     using ErrorHandler = Function<void(DecoderError&&)>;
     using BlockEndTimeHandler = Function<void(AK::Duration)>;
-    using SeekCompletionHandler = Function<void()>;
-    using QueueIsFullHandler = Function<void()>;
 
-    static DecoderErrorOr<NonnullRefPtr<AudioDataProvider>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const& demuxer, Track const& track);
-    AudioDataProvider(NonnullRefPtr<ThreadData> const&);
-    ~AudioDataProvider();
+    static DecoderErrorOr<NonnullRefPtr<DecodedAudioProducer>> try_create(NonnullRefPtr<Core::WeakEventLoopReference> const& main_thread_event_loop, NonnullRefPtr<Demuxer> const& demuxer, Track const& track);
+    DecodedAudioProducer(NonnullRefPtr<ThreadData> const&);
+    ~DecodedAudioProducer();
 
     void set_error_handler(ErrorHandler&&);
     void set_duration_change_handler(BlockEndTimeHandler&&);
-    void set_queue_is_full_handler(QueueIsFullHandler&&);
-    void set_output_sample_specification(Audio::SampleSpecification);
+    virtual ErrorOr<void> set_output_sample_specification(Audio::SampleSpecification) override;
 
-    void start();
+    virtual void start() override;
     void suspend();
     void resume();
 
-    AudioBlock retrieve_block();
+    virtual PipelineStatus pull(AudioBlock& into) override;
+    virtual void set_state_changed_handler(PipelineStateChangeHandler) override;
 
-    void seek(AK::Duration timestamp, SeekCompletionHandler&& = nullptr);
-
-    bool is_blocked() const;
-    i64 queue_end_sample() const;
+    virtual void seek(AK::Duration timestamp) override;
 
     TimeRanges buffered_time_ranges() const;
 
@@ -69,8 +65,8 @@ private:
 
         void set_error_handler(ErrorHandler&&);
         void set_duration_change_handler(BlockEndTimeHandler&&);
-        void set_queue_is_full_handler(QueueIsFullHandler&&);
-        void set_output_sample_specification(Audio::SampleSpecification);
+        ErrorOr<void> set_output_sample_specification(Audio::SampleSpecification);
+        void set_state_changed_handler(PipelineStateChangeHandler);
 
         void start();
         DecoderErrorOr<void> create_decoder();
@@ -92,16 +88,14 @@ private:
         void flush_decoder();
         DecoderErrorOr<void> retrieve_next_block(AudioBlock&);
         bool handle_seek();
-        template<typename Callback>
-        void process_seek_on_main_thread(u32 seek_id, Callback);
         void resolve_seek(u32 seek_id);
         void push_data_and_decode_a_block();
-        bool is_blocked() const;
-        i64 queue_end_sample() const;
+
+        PipelineStatus pull(AudioBlock& into);
 
         TimeRanges buffered_time_ranges() const;
 
-        void seek(AK::Duration timestamp, SeekCompletionHandler&&);
+        void seek(AK::Duration timestamp);
 
         [[nodiscard]] Sync::MutexLocker<Sync::Mutex> take_lock() const { return Sync::MutexLocker(m_mutex); }
         void wake() const { m_wait_condition.broadcast(); }
@@ -109,6 +103,10 @@ private:
         AudioDecoder const& decoder() const { return *m_decoder; }
         AudioQueue& queue() { return m_queue; }
         void clear_queue();
+
+        void dispatch_state_if_changed_while_locked(PipelineStatus);
+
+        void enter_halting_state(PipelineStatus, Optional<DecoderError>);
 
     private:
         enum class RequestedState : u8 {
@@ -130,20 +128,20 @@ private:
         OwnPtr<AudioDecoder> m_decoder;
         bool m_decoder_needs_keyframe_next_seek { false };
         NonnullOwnPtr<Audio::AudioConverter> m_converter;
-        i64 m_last_sample { NumericLimits<i64>::min() };
+        i64 m_last_output_frame { NumericLimits<i64>::min() };
 
         size_t m_queue_max_size { 8 };
         AudioQueue m_queue;
         BlockEndTimeHandler m_duration_change_handler;
         ErrorHandler m_error_handler;
-        bool m_is_in_error_state { false };
-        QueueIsFullHandler m_queue_is_full_handler;
-        i64 m_queue_end_sample { 0 };
+        PipelineStatus m_pending_halting_status { PipelineStatus::Pending };
 
         u32 m_last_processed_seek_id { 0 };
         Atomic<u32> m_seek_id { 0 };
-        SeekCompletionHandler m_seek_completion_handler;
         AK::Duration m_seek_timestamp;
+
+        PipelineStateChangeHandler m_state_changed_handler;
+        PipelineStatus m_last_dispatched_status { PipelineStatus::Pending };
     };
 
     NonnullRefPtr<ThreadData> m_thread_data;
