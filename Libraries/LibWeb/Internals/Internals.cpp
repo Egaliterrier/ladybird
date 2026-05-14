@@ -754,12 +754,12 @@ String Internals::async_scrolling_state_wheel_target_at(double x, double y, doub
 
     Compositor::AsyncScrollTree scroll_tree;
     scroll_tree.set_state(move(snapshot->state));
-    scroll_tree.rebuild_wheel_scroll_targets(snapshot->display_list, snapshot->document_paintable->scroll_state_snapshot());
+    scroll_tree.rebuild_wheel_hit_test_targets(snapshot->display_list, snapshot->document_paintable->scroll_state_snapshot());
 
     auto target = scroll_tree.hit_test_scroll_node_for_wheel(
         { static_cast<float>(x), static_cast<float>(y) },
         { static_cast<float>(delta_x), static_cast<float>(delta_y) });
-    if (target.blocked_by_main_thread_region || !target.node_id.has_value())
+    if (target.blocked_by_main_thread_region || target.blocked_by_wheel_event_region || !target.node_id.has_value())
         return "none"_string;
     if (scroll_tree.scroll_node_is_viewport(*target.node_id))
         return "viewport"_string;

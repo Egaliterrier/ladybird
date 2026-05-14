@@ -9,6 +9,7 @@
 #include <LibWeb/Compositor/AsyncScrollingState.h>
 #include <LibWeb/DOM/DOMEventListener.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/EventTarget.h>
 #include <LibWeb/HTML/Navigable.h>
 #include <LibWeb/HTML/NavigableContainer.h>
@@ -21,6 +22,8 @@
 #include <LibWeb/Painting/ScrollState.h>
 #include <LibWeb/Painting/ViewportPaintable.h>
 #include <LibWeb/PixelUnits.h>
+
+#include <AK/StdLibExtras.h>
 
 namespace Web::Compositor {
 
@@ -53,6 +56,56 @@ static AsyncScrollNodeID scroll_node_id_for(UniqueNodeID document_id, Painting::
     return { .document_id = document_id, .scroll_frame_index = scroll_frame_index };
 }
 
+static Optional<Painting::CompositorScrollNodeKind> scroll_node_kind_for(Painting::PaintableBox const& paintable_box)
+{
+    if (paintable_box.is_viewport_paintable())
+        return Painting::CompositorScrollNodeKind::Viewport;
+    if (paintable_box.layout_node().generated_for_pseudo_element().has_value())
+        return Painting::CompositorScrollNodeKind::PseudoElement;
+    if (paintable_box.dom_node() && is<DOM::Element>(*paintable_box.dom_node()))
+        return Painting::CompositorScrollNodeKind::Element;
+    return {};
+}
+
+static UniqueNodeID scrollable_node_id_for(Painting::PaintableBox const& paintable_box)
+{
+    if (paintable_box.is_viewport_paintable())
+        return paintable_box.document().unique_id();
+    if (paintable_box.layout_node().generated_for_pseudo_element().has_value())
+        return paintable_box.layout_node().pseudo_element_generator()->unique_id();
+    return paintable_box.dom_node()->unique_id();
+}
+
+static u8 pseudo_element_type_for(Painting::PaintableBox const& paintable_box)
+{
+    auto pseudo_element = paintable_box.layout_node().generated_for_pseudo_element();
+    if (!pseudo_element.has_value())
+        return 0;
+    return static_cast<u8>(to_underlying(*pseudo_element));
+}
+
+static AsyncScrollNodeKind async_scroll_node_kind_for(Painting::CompositorScrollNodeKind kind)
+{
+    switch (kind) {
+    case Painting::CompositorScrollNodeKind::Viewport:
+        return AsyncScrollNodeKind::Viewport;
+    case Painting::CompositorScrollNodeKind::Element:
+        return AsyncScrollNodeKind::Element;
+    case Painting::CompositorScrollNodeKind::PseudoElement:
+        return AsyncScrollNodeKind::PseudoElement;
+    }
+    VERIFY_NOT_REACHED();
+}
+
+static AsyncScrollNodeStableID stable_scroll_node_id_for(UniqueNodeID scrollable_node_id, Painting::CompositorScrollNodeKind kind, u8 pseudo_element_type)
+{
+    return {
+        .node_id = scrollable_node_id,
+        .kind = async_scroll_node_kind_for(kind),
+        .pseudo_element_type = pseudo_element_type,
+    };
+}
+
 static bool is_nested_navigable_container(Painting::PaintableBox const& paintable_box)
 {
     auto node = paintable_box.dom_node();
@@ -74,6 +127,10 @@ static CSSPixelPoint maximum_scroll_offset_for(Painting::PaintableBox const& pai
 
 static void record_scroll_node(Painting::PaintableBox const& paintable_box, DisplayListRecordingContext& context)
 {
+    auto scroll_node_kind = scroll_node_kind_for(paintable_box);
+    if (!scroll_node_kind.has_value())
+        return;
+
     auto parent_scroll_frame_index = Painting::ScrollFrameIndex {};
     if (auto scrollable_ancestor = paintable_box.nearest_scrollable_ancestor())
         parent_scroll_frame_index = scrollable_ancestor->own_scroll_frame_index();
@@ -85,10 +142,13 @@ static void record_scroll_node(Painting::PaintableBox const& paintable_box, Disp
     auto& recorder = context.display_list_recorder();
     recorder.compositor_scroll_node({
         .document_id = paintable_box.document().unique_id(),
+        .scrollable_node_id = scrollable_node_id_for(paintable_box),
         .scroll_frame_index = paintable_box.own_scroll_frame_index(),
         .parent_scroll_frame_index = parent_scroll_frame_index,
         .scrollport_rect = scrollport_rect,
         .max_scroll_offset = css_point_to_device_point(maximum_scroll_offset_for(paintable_box), context.device_pixels_per_css_pixel()),
+        .scroll_node_kind = *scroll_node_kind,
+        .pseudo_element_type = pseudo_element_type_for(paintable_box),
         .is_viewport = paintable_box.is_viewport_paintable(),
     });
 }
@@ -101,6 +161,34 @@ static void record_main_thread_wheel_event_region(Painting::PaintableBox const& 
 
     context.display_list_recorder().compositor_main_thread_wheel_event_region({
         .rect = rect,
+    });
+}
+
+static Optional<Painting::ScrollFrameIndex> wheel_hit_test_target_scroll_frame_index_for(Painting::PaintableBox const& paintable_box)
+{
+    if (paintable_box.own_scroll_frame_index().value() && paintable_box.could_be_scrolled_by_wheel_event())
+        return paintable_box.own_scroll_frame_index();
+    if (auto scrollable_ancestor = paintable_box.nearest_scrollable_ancestor())
+        return scrollable_ancestor->own_scroll_frame_index();
+    if (auto viewport_paintable = paintable_box.document().paintable(); viewport_paintable && viewport_paintable->could_be_scrolled_by_wheel_event())
+        return viewport_paintable->own_scroll_frame_index();
+    return {};
+}
+
+static void record_wheel_hit_test_target(Painting::PaintableBox const& paintable_box, DisplayListRecordingContext& context)
+{
+    if (!paintable_box.is_visible() || !paintable_box.visible_for_hit_testing())
+        return;
+
+    auto rect = css_rect_to_device_rect(paintable_box.absolute_border_box_rect(), context.device_pixels_per_css_pixel());
+    if (rect.is_empty())
+        return;
+
+    context.display_list_recorder().compositor_wheel_hit_test_target({
+        .document_id = paintable_box.document().unique_id(),
+        .target_scroll_frame_index = wheel_hit_test_target_scroll_frame_index_for(paintable_box).value_or({}),
+        .rect = rect,
+        .corner_radii = paintable_box.border_radii_data().as_corners(context.device_pixel_converter()),
     });
 }
 
@@ -200,6 +288,8 @@ void record_async_scrolling_metadata_for_paintable(Painting::PaintableBox const&
     auto device_pixels_per_css_pixel = context.device_pixels_per_css_pixel();
     auto& recorder = context.display_list_recorder();
 
+    record_wheel_hit_test_target(paintable_box, context);
+
     if (!context.has_blocking_wheel_event_region_covering_viewport()) {
         if (auto node = paintable_box.dom_node(); node && !is_root_wheel_event_target(*node) && has_blocking_wheel_event_listener(*node)) {
             context.set_has_blocking_wheel_event_listeners(true);
@@ -259,6 +349,8 @@ AsyncScrollingState async_scrolling_state_from_display_list(Painting::DisplayLis
 {
     AsyncScrollingState async_scrolling_state;
     Vector<Painting::ScrollFrameIndex> parent_scroll_frame_indices;
+    Vector<Painting::ScrollFrameIndex> wheel_hit_test_target_scroll_frame_indices;
+    Vector<UniqueNodeID> wheel_hit_test_target_document_ids;
 
     if (auto const& metadata = display_list.async_scrolling_metadata(); metadata.has_value()) {
         async_scrolling_state.viewport_rect = metadata->viewport_rect;
@@ -301,6 +393,7 @@ AsyncScrollingState async_scrolling_state_from_display_list(Painting::DisplayLis
             auto command = Painting::read_display_list_command_payload<Painting::CompositorScrollNode>(payload);
             async_scrolling_state.scroll_nodes.append({
                 .node_id = scroll_node_id_for(command.document_id, command.scroll_frame_index),
+                .stable_node_id = stable_scroll_node_id_for(command.scrollable_node_id, command.scroll_node_kind, command.pseudo_element_type),
                 .parent_node_id = {},
                 .hit_test_visual_context_index = header.context_index,
                 .scrollport_rect = command.scrollport_rect,
@@ -308,6 +401,18 @@ AsyncScrollingState async_scrolling_state_from_display_list(Painting::DisplayLis
                 .is_viewport = command.is_viewport,
             });
             parent_scroll_frame_indices.append(command.parent_scroll_frame_index);
+            break;
+        }
+        case Painting::DisplayListCommandType::CompositorWheelHitTestTarget: {
+            auto command = Painting::read_display_list_command_payload<Painting::CompositorWheelHitTestTarget>(payload);
+            async_scrolling_state.wheel_hit_test_targets.append({
+                .visual_context_index = header.context_index,
+                .rect = command.rect,
+                .corner_radii = command.corner_radii,
+                .target_node_id = {},
+            });
+            wheel_hit_test_target_scroll_frame_indices.append(command.target_scroll_frame_index);
+            wheel_hit_test_target_document_ids.append(command.document_id);
             break;
         }
         case Painting::DisplayListCommandType::CompositorMainThreadWheelEventRegion: {
@@ -347,23 +452,24 @@ AsyncScrollingState async_scrolling_state_from_display_list(Painting::DisplayLis
         if (parent_scroll_frame_index.value())
             async_scrolling_state.scroll_nodes[i].parent_node_id = scroll_node_id_for(async_scrolling_state.scroll_nodes[i].node_id.document_id, parent_scroll_frame_index);
     }
+
+    VERIFY(wheel_hit_test_target_scroll_frame_indices.size() == async_scrolling_state.wheel_hit_test_targets.size());
+    VERIFY(wheel_hit_test_target_document_ids.size() == async_scrolling_state.wheel_hit_test_targets.size());
+    for (size_t i = 0; i < async_scrolling_state.wheel_hit_test_targets.size(); ++i) {
+        auto target_scroll_frame_index = wheel_hit_test_target_scroll_frame_indices[i];
+        if (target_scroll_frame_index.value())
+            async_scrolling_state.wheel_hit_test_targets[i].target_node_id = scroll_node_id_for(wheel_hit_test_target_document_ids[i], target_scroll_frame_index);
+    }
     return async_scrolling_state;
 }
 
 WheelRoutingAdmission wheel_routing_admission_for(AsyncScrollingState const& state)
 {
-    if (state.has_blocking_wheel_event_listeners)
+    if (state.has_blocking_wheel_event_region_covering_viewport)
         return WheelRoutingAdmission::BlockingWheelEventListeners;
 
-    bool found_viewport_node = false;
-    for (auto const& node : state.scroll_nodes) {
-        if (node.is_viewport) {
-            found_viewport_node = true;
-            break;
-        }
-    }
-    if (!found_viewport_node)
-        return WheelRoutingAdmission::NoViewportScrollNode;
+    if (state.scroll_nodes.is_empty())
+        return WheelRoutingAdmission::NoScrollNode;
     return WheelRoutingAdmission::Accepted;
 }
 
@@ -376,8 +482,8 @@ StringView wheel_routing_admission_to_string(WheelRoutingAdmission admission)
         return "no async scrolling state"sv;
     case WheelRoutingAdmission::BlockingWheelEventListeners:
         return "blocking wheel event listeners"sv;
-    case WheelRoutingAdmission::NoViewportScrollNode:
-        return "no viewport scroll node"sv;
+    case WheelRoutingAdmission::NoScrollNode:
+        return "no scroll node"sv;
     case WheelRoutingAdmission::StaleWheelEventListeners:
         return "stale wheel event listeners"sv;
     }
@@ -412,7 +518,7 @@ static WheelHitTestResult hit_test_scroll_node_at_position(AsyncScrollingState c
     AsyncScrollTree scroll_tree;
     auto async_scrolling_state_copy = async_scrolling_state;
     scroll_tree.set_state(move(async_scrolling_state_copy));
-    scroll_tree.rebuild_wheel_scroll_targets(display_list, scroll_state_snapshot);
+    scroll_tree.rebuild_wheel_hit_test_targets(display_list, scroll_state_snapshot);
     return scroll_tree.hit_test_scroll_node_for_wheel(position, delta);
 }
 
