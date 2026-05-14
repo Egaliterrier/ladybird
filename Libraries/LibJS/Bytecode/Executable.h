@@ -137,14 +137,10 @@ struct ObjectPropertyIteratorCache {
     GC::Ptr<Object> reusable_property_name_iterator;
 };
 
-struct SourceRecord {
-    Position start {};
-    Position end {};
-};
-
 struct SourceMapEntry {
     u32 bytecode_offset {};
-    SourceRecord source_record {};
+    u32 line {};
+    u32 column {};
 };
 
 class JS_API Executable final
@@ -205,7 +201,6 @@ public:
     };
 
     Vector<ExceptionHandlers> exception_handlers;
-    Vector<size_t> basic_block_start_offsets;
 
     Vector<SourceMapEntry> source_map;
 
@@ -226,6 +221,7 @@ public:
         return get_identifier(*index);
     }
 
+    [[nodiscard]] COLD Optional<size_t> basic_block_index_for_offset(size_t offset) const;
     [[nodiscard]] COLD Optional<ExceptionHandlers const&> exception_handlers_for_offset(size_t offset) const;
 
     [[nodiscard]] Optional<SourceRange> source_range_at(size_t offset) const;
