@@ -3,7 +3,7 @@ name: Windows Build
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0' # Runs at 00:00 every Sunday
+    - cron: '0 0 */14 * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
