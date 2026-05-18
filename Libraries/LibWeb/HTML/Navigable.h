@@ -7,7 +7,9 @@
 
 #pragma once
 
+#include <AK/Assertions.h>
 #include <AK/HashTable.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/Tuple.h>
 #include <LibJS/Heap/Cell.h>
@@ -239,9 +241,15 @@ public:
 
     [[nodiscard]] bool has_inclusive_ancestor_with_visibility_hidden() const;
 
-    Compositor::CompositorThread& rendering_thread() { return m_rendering_thread; }
+    Compositor::CompositorThread::Context& compositor_context()
+    {
+        VERIFY(m_compositor_context);
+        return *m_compositor_context;
+    }
+    bool has_compositor_context() const { return m_compositor_context; }
 
-    NonnullRefPtr<Painting::ExternalContentSource> external_content_source() const;
+    Painting::CompositorSurfaceId compositor_surface_id() const;
+    bool has_compositor_surface_id() const { return m_compositor_surface_id.has_value(); }
 
     void set_pending_set_browser_zoom_request(bool value) { m_pending_set_browser_zoom_request = value; }
     bool pending_set_browser_zoom_request() const { return m_pending_set_browser_zoom_request; }
@@ -277,6 +285,7 @@ private:
     void reset_cursor_blink_cycle();
 
     void scroll_offset_did_change();
+    void clear_compositor_surface();
 
     void inform_the_navigation_api_about_aborting_navigation();
     void resolve_async_scroll_operation(Compositor::AsyncScrollOperationID);
@@ -333,8 +342,8 @@ private:
     Optional<PaintConfig> m_rendering_thread_display_list_paint_config;
     Painting::DisplayListResourceStorage m_display_list_resource_storage;
     Painting::DisplayListResourceSet m_rendering_thread_display_list_resources;
-    Compositor::CompositorThread m_rendering_thread;
-    RefPtr<Painting::ExternalContentSource> m_external_content_source;
+    OwnPtr<Compositor::CompositorThread::Context> m_compositor_context;
+    Optional<Painting::CompositorSurfaceId> m_compositor_surface_id;
 
     struct PendingAsyncScrollOperation {
         Compositor::AsyncScrollOperationID operation_id { 0 };

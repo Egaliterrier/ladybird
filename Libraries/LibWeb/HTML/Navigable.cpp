@@ -55,7 +55,6 @@
 #include <LibWeb/Layout/Viewport.h>
 #include <LibWeb/Loader/GeneratedPagesLoader.h>
 #include <LibWeb/Page/Page.h>
-#include <LibWeb/Painting/ExternalContentSource.h>
 #include <LibWeb/Painting/Paintable.h>
 #include <LibWeb/Painting/PaintableBox.h>
 #include <LibWeb/Painting/ViewportPaintable.h>
@@ -281,15 +280,14 @@ Navigable::Navigable(
     : m_page(page)
     , m_event_handler({}, *this)
     , m_is_svg_page(is_svg_page)
-    , m_rendering_thread(
-          is_svg_page ? 0 : page->client().id(),
-          is_svg_page ? Compositor::CompositorThread::PagePresentationRegistration::No : page_presentation_registration)
 {
     all_navigables().set(*this);
 
-    if (!m_is_svg_page) {
-        auto display_list_player_type = page->client().display_list_player_type();
-        m_rendering_thread.start(display_list_player_type);
+    if (!m_is_svg_page && page->has_compositor_thread()) {
+        Optional<u64> page_id;
+        if (page_presentation_registration == Compositor::CompositorThread::PagePresentationRegistration::Yes)
+            page_id = page->client().id();
+        m_compositor_context = page->compositor_thread().create_context(page_id, page_presentation_registration);
     }
 }
 
@@ -297,12 +295,14 @@ Navigable::~Navigable() = default;
 
 void Navigable::set_has_been_destroyed()
 {
+    clear_compositor_surface();
     m_has_been_destroyed = true;
     resolve_all_pending_async_scroll_operations();
 }
 
 void Navigable::remove_from_all_navigables()
 {
+    clear_compositor_surface();
     resolve_all_pending_async_scroll_operations();
 
     if (m_active_document)
@@ -312,6 +312,7 @@ void Navigable::remove_from_all_navigables()
 
 void Navigable::finalize()
 {
+    clear_compositor_surface();
     all_navigables().remove(*this);
     Base::finalize();
 }
@@ -429,9 +430,12 @@ void Navigable::initialize_navigable(NonnullRefPtr<DocumentState> document_state
     m_parent = parent;
     if (parent)
         m_should_show_line_box_borders = parent->m_should_show_line_box_borders;
-    if (parent && !m_is_svg_page) {
-        m_external_content_source = Painting::ExternalContentSource::create();
-        m_rendering_thread.set_presentation_mode(Compositor::CompositorThread::PublishToExternalContent { external_content_source() });
+    if (parent && !m_is_svg_page && has_compositor_context() && parent->has_compositor_context()) {
+        m_compositor_surface_id = Painting::allocate_compositor_surface_id();
+        compositor_context().set_presentation_mode(Compositor::CompositorThread::PublishToCompositorSurface {
+            .target_context_id = parent->compositor_context().id(),
+            .surface_id = *m_compositor_surface_id,
+        });
     }
 
     // 6. Set the initial visibility state of documentState's document to navigable's traversable navigable's system visibility state.
@@ -2846,8 +2850,8 @@ void Navigable::set_viewport_size(CSSPixelSize size, InvalidateDisplayList inval
 
     m_viewport_size = size;
 
-    if (!m_is_svg_page) {
-        m_rendering_thread.viewport_size_updated(
+    if (has_compositor_context()) {
+        compositor_context().viewport_size_updated(
             page().css_to_device_rect(viewport_rect()).size().to_type<int>(),
             is_top_level_traversable(),
             Compositor::WindowResizingInProgress::Yes);
@@ -3026,17 +3030,17 @@ static bool adopt_async_viewport_scroll_delta(Navigable& navigable, CSSPixelPoin
 
 void Navigable::adopt_pending_async_scroll_offsets()
 {
-    if (!page().async_scrolling_enabled())
+    if (!page().async_scrolling_enabled() || !has_compositor_context())
         return;
 
     // The compositor thread may have already presented newer scroll offsets. Adopt the latest ones before running
     // rendering-update observers so they see the same scroll positions as the user.
-    if (m_rendering_thread.should_defer_async_scroll_offset_adoption()) {
+    if (compositor_context().should_defer_async_scroll_offset_adoption()) {
         dbgln_if(COMPOSITOR_DEBUG, "[Compositor] Main thread deferred async scroll offset adoption");
         return;
     }
 
-    auto async_scroll_updates = m_rendering_thread.take_pending_async_scroll_updates();
+    auto async_scroll_updates = compositor_context().take_pending_async_scroll_updates();
     if (async_scroll_updates.scroll_offsets.is_empty() && async_scroll_updates.completed_operation_ids.is_empty())
         return;
 
@@ -3274,10 +3278,19 @@ void Navigable::set_has_session_history_entry_and_ready_for_navigation()
     }
 }
 
-NonnullRefPtr<Painting::ExternalContentSource> Navigable::external_content_source() const
+Painting::CompositorSurfaceId Navigable::compositor_surface_id() const
 {
-    VERIFY(m_external_content_source);
-    return *m_external_content_source;
+    VERIFY(m_compositor_surface_id.has_value());
+    return *m_compositor_surface_id;
+}
+
+void Navigable::clear_compositor_surface()
+{
+    if (!m_compositor_surface_id.has_value())
+        return;
+    if (auto parent = this->parent(); parent && parent->has_compositor_context())
+        parent->compositor_context().clear_compositor_surface(*m_compositor_surface_id);
+    m_compositor_surface_id.clear();
 }
 
 void Navigable::set_should_show_line_box_borders(bool value)
@@ -3291,6 +3304,9 @@ void Navigable::set_should_show_line_box_borders(bool value)
 
 void Navigable::record_display_list_and_scroll_state(PaintConfig paint_config)
 {
+    if (!has_compositor_context())
+        return;
+
     m_needs_repaint = false;
     auto document = active_document();
     if (!document)
@@ -3322,29 +3338,37 @@ void Navigable::record_display_list_and_scroll_state(PaintConfig paint_config)
 
     Painting::ScrollStateSnapshot scroll_state_snapshot { document_paintable->scroll_state_snapshot() };
     if (should_record_display_list) {
-        m_rendering_thread.update_display_list(*display_list, move(resource_transaction), move(scroll_state_snapshot));
+        compositor_context().update_display_list(*display_list, move(resource_transaction), move(scroll_state_snapshot));
         m_needs_to_record_display_list = false;
         m_rendering_thread_display_list_paint_config = paint_config;
     } else {
-        m_rendering_thread.update_scroll_state(move(scroll_state_snapshot));
+        compositor_context().update_scroll_state(move(scroll_state_snapshot));
     }
 }
 
 void Navigable::paint_next_frame()
 {
+    if (has_been_destroyed())
+        return;
+    if (!has_compositor_context()) {
+        m_needs_repaint = false;
+        return;
+    }
+
     auto viewport_rect = page().css_to_device_rect(this->viewport_rect()).to_type<int>();
     PaintConfig paint_config { .paint_overlay = true, .should_show_line_box_borders = m_should_show_line_box_borders };
     if (is_top_level_traversable()) {
         paint_config.canvas_fill_rect = Gfx::IntRect { {}, viewport_rect.size() };
     } else {
-        // Nested navigables publish transparent bitmaps to their preconfigured ExternalContentSource instead of filling
+        // Nested navigables publish transparent bitmaps to their preconfigured compositor surface instead of filling
         // the canvas for the UI process.
-        VERIFY(m_external_content_source);
+        if (!m_compositor_surface_id.has_value())
+            return;
     }
 
     auto should_defer_main_thread_present_for_async_scroll = [&] {
         return page().async_scrolling_enabled()
-            && m_rendering_thread.should_defer_main_thread_present_for_async_scroll();
+            && compositor_context().should_defer_main_thread_present_for_async_scroll();
     };
     if (should_defer_main_thread_present_for_async_scroll())
         return;
@@ -3357,15 +3381,18 @@ void Navigable::paint_next_frame()
         return;
     }
 
-    auto frame_id = m_rendering_thread.present_frame(viewport_rect);
-    if (!is_top_level_traversable())
-        m_rendering_thread.wait_for_frame(frame_id);
+    compositor_context().present_frame(viewport_rect);
 }
 
 void Navigable::render_screenshot(Gfx::PaintingSurface& painting_surface, PaintConfig paint_config, Function<void()>&& callback)
 {
+    if (!has_compositor_context()) {
+        callback();
+        return;
+    }
+
     record_display_list_and_scroll_state(paint_config);
-    m_rendering_thread.request_screenshot(painting_surface, move(callback));
+    compositor_context().request_screenshot(painting_surface, move(callback));
 }
 
 GC::Ref<WebIDL::Promise> Navigable::scroll_viewport_by_delta(CSSPixelPoint delta)
