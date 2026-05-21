@@ -49,7 +49,7 @@
 #include <LibWeb/HTML/Window.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWeb/Layout/Viewport.h>
-#include <LibWeb/Loader/ContentFilter.h>
+#include <LibWeb/Loader/ContentBlocker.h>
 #include <LibWeb/Loader/ProxyMappings.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Loader/UserAgent.h>
@@ -377,12 +377,12 @@ void ConnectionFromClient::debug_request(u64 page_id, ByteString request, ByteSt
                     auto styles = doc->style_computer().compute_style({ *element });
                     dump_style(MUST(String::formatted("Element {}", node->debug_description())), styles, element->custom_property_data({}));
 
-                    for (auto pseudo_element_index = 0; pseudo_element_index < to_underlying(Web::CSS::PseudoElement::KnownPseudoElementCount); ++pseudo_element_index) {
-                        auto pseudo_element_type = static_cast<Web::CSS::PseudoElement>(pseudo_element_index);
-                        if (auto pseudo_element = element->get_pseudo_element(pseudo_element_type); pseudo_element.has_value() && pseudo_element->computed_properties()) {
-                            dump_style(MUST(String::formatted("PseudoElement {}::{}", node->debug_description(), Web::CSS::pseudo_element_name(pseudo_element_type))), *pseudo_element->computed_properties(), pseudo_element->custom_property_data());
-                        }
-                    }
+                    element->for_each_synthetic_pseudo_element([&](Web::CSS::PseudoElement pseudo_element_type, Web::DOM::PseudoElement const& pseudo_element) {
+                        if (!pseudo_element.computed_properties())
+                            return;
+
+                        dump_style(MUST(String::formatted("PseudoElement {}::{}", node->debug_description(), Web::CSS::pseudo_element_name(pseudo_element_type))), *pseudo_element.computed_properties(), pseudo_element.custom_property_data());
+                    });
                 }
             }
         }
@@ -457,8 +457,8 @@ void ConnectionFromClient::debug_request(u64 page_id, ByteString request, ByteSt
         return;
     }
 
-    if (request == "content-filtering") {
-        Web::ContentFilter::the().set_filtering_enabled(argument == "on");
+    if (request == "content-blocking") {
+        page->page().set_content_blocking_enabled(argument == "on");
         return;
     }
 }
@@ -1144,9 +1144,38 @@ void ConnectionFromClient::paste(u64 page_id, Utf16String text)
         page->page().focused_navigable().paste(text);
 }
 
-void ConnectionFromClient::set_content_filters(u64, Vector<String> filters)
+static ErrorOr<Vector<String>> parse_content_blocker_patterns(Core::AnonymousBuffer const& patterns_buffer)
 {
-    Web::ContentFilter::the().set_patterns(filters).release_value_but_fixme_should_propagate_errors();
+    Vector<String> patterns;
+
+    for (auto line : StringView { patterns_buffer.bytes() }.split_view('\n', SplitBehavior::Nothing)) {
+        if (line.ends_with('\r'))
+            line = line.substring_view(0, line.length() - 1);
+        if (line.is_empty())
+            continue;
+
+        patterns.append(TRY(String::from_utf8(line)));
+    }
+
+    return patterns;
+}
+
+void ConnectionFromClient::set_content_blockers(u64 page_id, Core::AnonymousBuffer patterns_buffer)
+{
+    auto patterns_or_error = parse_content_blocker_patterns(patterns_buffer);
+    if (patterns_or_error.is_error()) {
+        dbgln("Failed to set content blockers: {}", patterns_or_error.error());
+        return;
+    }
+
+    auto& blocker = Web::ContentBlocker::the();
+    auto had_cosmetic_rules = blocker.has_cosmetic_rules();
+    blocker.set_patterns(patterns_or_error.value()).release_value_but_fixme_should_propagate_errors();
+
+    if (had_cosmetic_rules || blocker.has_cosmetic_rules()) {
+        if (auto page = this->page(page_id); page.has_value())
+            page->page().invalidate_user_style();
+    }
 }
 
 void ConnectionFromClient::set_autoplay_allowed_on_all_websites(u64)

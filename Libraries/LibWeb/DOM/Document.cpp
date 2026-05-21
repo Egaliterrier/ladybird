@@ -446,9 +446,9 @@ WebIDL::ExceptionOr<GC::Ref<Document>> Document::create_and_initialize(Type type
     document->m_active_sandboxing_flag_set = navigation_params.final_sandboxing_flag_set;
     document->m_navigation_id = navigation_params.id;
     document->set_load_timing_info(load_timing_info);
+    document->m_about_base_url = navigation_params.about_base_url;
     document->set_url(*creation_url);
     document->m_readiness = HTML::DocumentReadyState::Loading;
-    document->m_about_base_url = navigation_params.about_base_url;
     document->set_allow_declarative_shadow_roots(true);
     document->set_custom_element_registry(realm.create<HTML::CustomElementRegistry>(realm));
 
@@ -1279,7 +1279,7 @@ void Document::clear_layout_and_paintable_nodes_for_inactive_document()
     for_each_in_inclusive_subtree([&](auto& node) {
         node.clear_layout_node_and_paintable({});
         if (auto* element = as_if<Element>(node))
-            element->clear_pseudo_element_layout_nodes({});
+            element->clear_synthetic_pseudo_element_layout_nodes(Badge<Document> {});
         return TraversalDecision::Continue;
     });
 }
@@ -2359,7 +2359,7 @@ GC::Ptr<Layout::Node> Document::highlighted_layout_node()
         return m_highlighted_node->unsafe_layout_node();
 
     auto const& element = static_cast<Element const&>(*m_highlighted_node);
-    return element.get_pseudo_element_node(m_highlighted_pseudo_element.value());
+    return element.pseudo_element_unsafe_layout_node(m_highlighted_pseudo_element.value());
 }
 
 static Node* find_common_ancestor(Node* a, Node* b)
