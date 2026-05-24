@@ -775,6 +775,12 @@ void Document::visit_edges(Cell::Visitor& visitor)
 
 String const& Document::content_blocker_style_sheet()
 {
+    if (is_decoded_svg()) {
+        if (!m_content_blocker_style_sheet.has_value())
+            m_content_blocker_style_sheet = String {};
+        return m_content_blocker_style_sheet.value();
+    }
+
     if (!m_content_blocker_style_sheet.has_value()) {
         m_content_blocker_style_sheet_checked_classes.clear();
         m_content_blocker_style_sheet_checked_ids.clear();
@@ -816,6 +822,9 @@ void Document::invalidate_content_blocker_style_sheet()
 
 bool Document::content_blocker_style_sheet_may_need_refresh_for_class_or_id(FlyString const* id, ReadonlySpan<FlyString> class_names)
 {
+    if (is_decoded_svg())
+        return false;
+
     if (!m_content_blocker_style_sheet.has_value())
         return false;
 
@@ -7712,8 +7721,15 @@ void Document::add_render_blocking_element(GC::Ref<Element> element)
 void Document::remove_render_blocking_element(GC::Ref<Element> element)
 {
     m_render_blocking_elements.remove(element);
-    if (m_render_blocking_elements.is_empty())
-        page().client().request_frame();
+    if (!m_render_blocking_elements.is_empty())
+        return;
+
+    if (auto navigable = this->navigable()) {
+        if (auto container = navigable->container())
+            container->set_needs_repaint(InvalidateDisplayList::Yes);
+    }
+
+    page().client().request_frame();
 }
 
 // https://fullscreen.spec.whatwg.org/#run-the-fullscreen-steps
@@ -8004,7 +8020,7 @@ void Document::parse_html_from_a_string(StringView html)
     // 3. Place html into the input stream for parser. The encoding confidence is irrelevant.
     // FIXME: We don't have the concept of encoding confidence yet.
     auto scripting_mode = is_scripting_enabled() ? HTML::ParserScriptingMode::Normal : HTML::ParserScriptingMode::Disabled;
-    auto parser = HTML::HTMLParser::create(*this, html, scripting_mode, "UTF-8"sv);
+    auto parser = HTML::HTMLParser::create_for_decoded_string(*this, html, scripting_mode, "UTF-8"sv);
 
     // 4. Start parser and let it run until it has consumed all the characters just inserted into the input stream.
     parser->run(as<HTML::Window>(HTML::relevant_global_object(*this)).associated_document().url());
