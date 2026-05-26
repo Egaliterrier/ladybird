@@ -16,6 +16,7 @@
 #include <LibWebView/HistoryStore.h>
 #include <UI/Qt/Application.h>
 #include <UI/Qt/BrowserWindow.h>
+#include <UI/Qt/ChromeStyle.h>
 #include <UI/Qt/Icon.h>
 #include <UI/Qt/Menu.h>
 #include <UI/Qt/Settings.h>
@@ -460,6 +461,9 @@ void BrowserWindow::update_bookmarks_bar_display(bool show_bookmarks_bar)
 
 void BrowserWindow::on_devtools_enabled()
 {
+    statusBar()->setObjectName("LadybirdStatusBar");
+    statusBar()->setStyleSheet(ChromeStyle::status_bar_style_sheet(current_tab()->palette()));
+
     auto* disable_button = new QPushButton("Disable", this);
 
     connect(disable_button, &QPushButton::clicked, this, []() {
@@ -468,8 +472,7 @@ void BrowserWindow::on_devtools_enabled()
 
     statusBar()->addPermanentWidget(disable_button);
 
-    auto message = MUST(String::formatted("DevTools is enabled on port {}", WebView::Application::browser_options().devtools_port));
-    statusBar()->showMessage(qstring_from_ak_string(message));
+    statusBar()->showMessage(qformatted("DevTools is enabled on port {}", WebView::Application::browser_options().devtools_port));
 }
 
 void BrowserWindow::on_devtools_disabled()
@@ -748,6 +751,23 @@ void BrowserWindow::create_close_button_for_tab(Tab* tab)
     m_tabs_container->tab_bar()->setTabButton(index, position, button);
 }
 
+void BrowserWindow::update_tab_close_button_icons()
+{
+    auto update_button = [this](int index, QTabBar::ButtonPosition position) {
+        auto* button = m_tabs_container->tab_bar()->tabButton(index, position);
+        if (!button || button->objectName() != "LadybirdTabButton")
+            return;
+
+        if (auto* tab_bar_button = qobject_cast<TabBarButton*>(button))
+            tab_bar_button->setIcon(create_chrome_icon(ChromeIcon::Close, palette()));
+    };
+
+    for (int index = 0; index < m_tabs_container->count(); ++index) {
+        update_button(index, QTabBar::LeftSide);
+        update_button(index, QTabBar::RightSide);
+    }
+}
+
 void BrowserWindow::tab_audio_play_state_changed(int index, Web::HTML::AudioPlayState play_state)
 {
     auto* tab = m_tabs_container->tab(index);
@@ -1022,7 +1042,9 @@ void BrowserWindow::resizeEvent(QResizeEvent* event)
 
 void BrowserWindow::changeEvent(QEvent* event)
 {
-    if (event->type() == QEvent::WindowStateChange) {
+    if (event->type() == QEvent::PaletteChange) {
+        update_tab_close_button_icons();
+    } else if (event->type() == QEvent::WindowStateChange) {
         QWindowStateChangeEvent* stateChangeEvent = static_cast<QWindowStateChangeEvent*>(event);
         bool was_fullscreen = stateChangeEvent->oldState() & Qt::WindowFullScreen;
         bool is_fullscreen = windowState() & Qt::WindowFullScreen;

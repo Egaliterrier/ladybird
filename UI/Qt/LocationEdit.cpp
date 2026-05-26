@@ -151,8 +151,8 @@ LocationEdit::LocationEdit(QWidget* parent)
     , m_autocomplete(new Autocomplete(this))
 {
     setObjectName("LadybirdLocationEdit");
-    setMinimumHeight(41);
-    setTextMargins(40, 0, 40, 0);
+    setMinimumHeight(37);
+    setTextMargins(38, 0, 40, 0);
     update_chrome_style();
 
     m_focus_glow_effect = new QGraphicsDropShadowEffect(this);
@@ -251,6 +251,9 @@ LocationEdit::LocationEdit(QWidget* parent)
         if (m_is_applying_inline_autocomplete)
             return;
 
+        if (m_url_is_hidden)
+            m_has_user_edited_hidden_url = true;
+
         auto query = current_query();
 
         if (m_should_suppress_inline_autocomplete_on_next_change) {
@@ -293,6 +296,18 @@ QAction* LocationEdit::trailing_action() const
     return m_trailing_action_button->defaultAction();
 }
 
+void LocationEdit::set_url_is_hidden(bool url_is_hidden)
+{
+    if (m_url_is_hidden == url_is_hidden)
+        return;
+
+    m_url_is_hidden = url_is_hidden;
+    m_has_user_edited_hidden_url = false;
+
+    if (m_url_is_hidden)
+        clear();
+}
+
 void LocationEdit::changeEvent(QEvent* event)
 {
     QLineEdit::changeEvent(event);
@@ -322,6 +337,7 @@ void LocationEdit::focusOutEvent(QFocusEvent* event)
 
     if (m_url_is_hidden) {
         m_url_is_hidden = false;
+        m_has_user_edited_hidden_url = false;
         if (text().isEmpty() && m_url.has_value())
             setText(qstring_from_ak_string(m_url->serialize()));
     }
@@ -392,11 +408,11 @@ void LocationEdit::resizeEvent(QResizeEvent* event)
     QLineEdit::resizeEvent(event);
 
     auto button_size = m_leading_icon_button->sizeHint();
-    auto y = (height() - button_size.height()) / 2 + 2;
+    auto y = (height() - button_size.height()) / 2 + 1;
     m_leading_icon_button->move(12, y);
 
     auto trailing_button_size = m_trailing_action_button->sizeHint();
-    auto trailing_y = (height() - trailing_button_size.height()) / 2 + 2;
+    auto trailing_y = (height() - trailing_button_size.height()) / 2 + 1;
     m_trailing_action_button->move(width() - trailing_button_size.width() - 12, trailing_y);
 }
 
@@ -517,7 +533,8 @@ void LocationEdit::set_url(Optional<URL::URL> url)
     m_url = AK::move(url);
 
     if (m_url_is_hidden) {
-        clear();
+        if (!m_has_user_edited_hidden_url)
+            clear();
     } else if (m_url.has_value()) {
         setText(qstring_from_ak_string(m_url->serialize()));
         setCursorPosition(0);
