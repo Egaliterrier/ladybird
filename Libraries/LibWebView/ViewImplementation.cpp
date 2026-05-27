@@ -14,6 +14,7 @@
 #include <LibGfx/ImageFormats/PNGWriter.h>
 #include <LibGfx/SharedImageBuffer.h>
 #include <LibURL/Parser.h>
+#include <LibWeb/CSS/SystemColor.h>
 #include <LibWeb/Crypto/Crypto.h>
 #include <LibWeb/Infra/Strings.h>
 #include <LibWebView/Application.h>
@@ -130,6 +131,12 @@ void ViewImplementation::set_favicon(Badge<WebContentClient>, Gfx::Bitmap const&
 
 void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL const& url)
 {
+    if (m_client_state.has_usable_bitmap) {
+        // Keep showing the old page until the new WebContent process paints its first frame.
+        m_backup_shared_image_buffer = move(m_client_state.front_bitmap.shared_image_buffer);
+        m_backup_bitmap_size = m_client_state.front_bitmap.last_painted_size;
+    }
+
     if (m_client_state.client) {
         m_client_state.client->unregister_view(m_client_state.page_index);
     }
@@ -140,8 +147,6 @@ void ViewImplementation::create_new_process_for_cross_site_navigation(URL::URL c
     if (on_web_content_process_change_for_cross_site_navigation)
         on_web_content_process_change_for_cross_site_navigation();
 
-    // Don't keep a stale backup bitmap around.
-    m_backup_shared_image_buffer = nullptr;
     handle_resize();
 
     load(url);
@@ -184,6 +189,9 @@ void ViewImplementation::did_update_window_rect()
 
 void ViewImplementation::set_system_visibility_state(Web::HTML::VisibilityState visibility_state)
 {
+    if (m_system_visibility_state == visibility_state)
+        return;
+
     m_system_visibility_state = visibility_state;
     client().async_set_system_visibility_state(m_client_state.page_index, m_system_visibility_state);
 }
@@ -345,6 +353,9 @@ void ViewImplementation::did_finish_handling_input_event(Badge<WebContentClient>
 
 void ViewImplementation::set_preferred_color_scheme(Web::CSS::PreferredColorScheme color_scheme)
 {
+    m_preferred_color_scheme = color_scheme;
+    set_page_background_color(preferred_canvas_background_color());
+
     client().async_set_preferred_color_scheme(page_id(), color_scheme);
 }
 
@@ -459,6 +470,16 @@ void ViewImplementation::inspect_dom_node(Web::UniqueNodeID node_id, DOMNodeProp
     client().async_inspect_dom_node(page_id(), property_type, node_id, pseudo_element);
 }
 
+void ViewImplementation::inspect_grid_layouts(Web::UniqueNodeID root_node_id)
+{
+    client().async_inspect_grid_layouts(page_id(), root_node_id);
+}
+
+void ViewImplementation::inspect_current_grid(Web::UniqueNodeID node_id)
+{
+    client().async_inspect_current_grid(page_id(), node_id);
+}
+
 void ViewImplementation::clear_inspected_dom_node()
 {
     client().async_clear_inspected_dom_node(page_id());
@@ -472,6 +493,16 @@ void ViewImplementation::highlight_dom_node(Web::UniqueNodeID node_id, Optional<
 void ViewImplementation::clear_highlighted_dom_node()
 {
     highlight_dom_node(0, {});
+}
+
+void ViewImplementation::highlight_grid(Web::UniqueNodeID node_id, JsonValue options)
+{
+    client().async_highlight_grid(page_id(), node_id, move(options));
+}
+
+void ViewImplementation::clear_grid_highlight(Web::UniqueNodeID node_id)
+{
+    client().async_clear_grid_highlight(page_id(), node_id);
 }
 
 void ViewImplementation::set_listen_for_dom_mutations(bool listen_for_dom_mutations)
@@ -679,9 +710,30 @@ void ViewImplementation::did_change_needs_beforeunload_check(Badge<WebContentCli
 
 void ViewImplementation::did_change_background_color(Badge<WebContentClient>, Gfx::Color color)
 {
+    set_page_background_color(color);
+}
+
+void ViewImplementation::set_page_background_color_to_system_canvas(bool dark)
+{
+    auto color_scheme = dark ? Web::CSS::PreferredColorScheme::Dark : Web::CSS::PreferredColorScheme::Light;
+    m_system_canvas_background_color = Web::CSS::SystemColor::canvas(color_scheme);
+    set_page_background_color(preferred_canvas_background_color());
+}
+
+void ViewImplementation::set_page_background_color(Gfx::Color color)
+{
     m_page_background_color = color;
     if (on_page_background_color_change)
-        on_page_background_color_change(color);
+        on_page_background_color_change(m_page_background_color);
+}
+
+Gfx::Color ViewImplementation::preferred_canvas_background_color() const
+{
+    if (m_preferred_color_scheme == Web::CSS::PreferredColorScheme::Dark)
+        return Web::CSS::SystemColor::canvas(Web::CSS::PreferredColorScheme::Dark);
+    if (m_preferred_color_scheme == Web::CSS::PreferredColorScheme::Light)
+        return Web::CSS::SystemColor::canvas(Web::CSS::PreferredColorScheme::Light);
+    return m_system_canvas_background_color;
 }
 
 void ViewImplementation::did_allocate_backing_stores(Badge<WebContentClient>, i32 front_bitmap_id, Gfx::SharedImage front_backing_store, i32 back_bitmap_id, Gfx::SharedImage back_backing_store)

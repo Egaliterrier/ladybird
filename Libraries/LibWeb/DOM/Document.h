@@ -30,6 +30,7 @@
 #include <LibWeb/Bindings/NavigationType.h>
 #include <LibWeb/CSS/CustomPropertyRegistration.h>
 #include <LibWeb/CSS/EnvironmentVariable.h>
+#include <LibWeb/CSS/PreferredColorScheme.h>
 #include <LibWeb/CSS/StyleScope.h>
 #include <LibWeb/DOM/AnchorNameMap.h>
 #include <LibWeb/DOM/HoverEventData.h>
@@ -46,6 +47,7 @@
 #include <LibWeb/HTML/SessionHistoryEntry.h>
 #include <LibWeb/HTML/VisibilityState.h>
 #include <LibWeb/InvalidateDisplayList.h>
+#include <LibWeb/Painting/GridInspectorOverlay.h>
 #include <LibWeb/ResizeObserver/ResizeObserver.h>
 #include <LibWeb/TrustedTypes/InjectionSink.h>
 #include <LibWeb/WebIDL/ExceptionOr.h>
@@ -119,6 +121,7 @@ enum class InvalidateLayoutTreeReason {
     X(HTMLLabelElementActivationBehavior)    \
     X(HostedDocumentBeforePaint)             \
     X(InspectDOMTree)                        \
+    X(InspectGridLayout)                     \
     X(InternalsHitTest)                      \
     X(MediaQueryListMatches)                 \
     X(NavigableSelectedText)                 \
@@ -304,6 +307,8 @@ public:
     GC::Ptr<Node const> highlighted_node() const { return m_highlighted_node; }
     GC::Ptr<Layout::Node> highlighted_layout_node();
     GC::Ptr<Layout::Node const> highlighted_layout_node() const { return const_cast<Document*>(this)->highlighted_layout_node(); }
+    void set_grid_highlighted_node(GC::Ptr<Node>, Painting::GridInspectorOverlayOptions);
+    void clear_grid_highlighted_node(GC::Ptr<Node>);
 
     Element* document_element();
     Element const* document_element() const;
@@ -355,6 +360,7 @@ public:
 
     Color background_color() const;
     Color canvas_background_color() const;
+    CSS::PreferredColorScheme canvas_color_scheme() const;
     Vector<CSS::BackgroundLayerData> const* background_layers() const;
     CSS::ImageRendering background_image_rendering() const;
 
@@ -368,6 +374,8 @@ public:
     void set_visited_link_color(Color);
 
     Optional<Vector<String> const&> supported_color_schemes() const;
+    void set_supported_color_schemes(Vector<String>);
+    void set_supported_color_schemes(Optional<Vector<String>>);
     void obtain_supported_color_schemes();
 
     void obtain_theme_color();
@@ -1200,6 +1208,12 @@ private:
     GC::Ptr<Node> m_inspected_node;
     GC::Ptr<Node> m_highlighted_node;
     Optional<CSS::PseudoElement> m_highlighted_pseudo_element;
+
+    struct GridHighlight {
+        GC::Ptr<Node> node;
+        Painting::GridInspectorOverlayOptions options;
+    };
+    Vector<GridHighlight> m_grid_highlights;
 
     Optional<Color> m_normal_link_color;
     Optional<Color> m_active_link_color;

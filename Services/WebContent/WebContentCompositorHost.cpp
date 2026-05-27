@@ -29,22 +29,16 @@ private:
         m_client.did_destroy_compositor_context(context_id);
     }
 
-    virtual void stop_presenting_to_client(Web::Compositor::CompositorContextId context_id) override
-    {
-        if (auto* connection = compositor_connection())
-            connection->stop_presenting_to_client(context_id);
-    }
-
     virtual void set_presentation_mode(Web::Compositor::CompositorContextId context_id, Web::Compositor::PresentationMode mode) override
     {
         if (auto* connection = compositor_connection())
             connection->set_presentation_mode(context_id, mode);
     }
 
-    virtual void update_display_list(Web::Compositor::CompositorContextId context_id, NonnullRefPtr<Web::Painting::DisplayList> display_list, Web::Painting::DisplayListResourceTransaction&& resource_transaction, Web::Painting::ScrollStateSnapshot&& scroll_state_snapshot) override
+    virtual void update_display_list(Web::Compositor::CompositorContextId context_id, NonnullRefPtr<Web::Painting::DisplayList> display_list, Web::Painting::AccumulatedVisualContextTree visual_context_tree, Web::Painting::DisplayListResourceTransaction&& resource_transaction, Web::Painting::ScrollStateSnapshot&& scroll_state_snapshot) override
     {
         if (auto* connection = compositor_connection())
-            connection->update_display_list(context_id, display_list, resource_transaction, scroll_state_snapshot);
+            connection->update_display_list(context_id, display_list, visual_context_tree, resource_transaction, scroll_state_snapshot);
     }
 
     virtual void update_video_frame(Web::Compositor::CompositorContextId context_id, Web::Painting::VideoFrameResourceId frame_id, NonnullRefPtr<Media::VideoFrame const> frame) override

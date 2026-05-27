@@ -132,6 +132,7 @@ public:
     CSSPixelRect web_exposed_screen_area() const;
     CSSPixelRect web_exposed_available_screen_area() const;
     CSS::PreferredColorScheme preferred_color_scheme() const;
+    void set_preferred_color_scheme_override_for_testing(Optional<CSS::PreferredColorScheme> color_scheme) { m_preferred_color_scheme_override_for_testing = color_scheme; }
     CSS::PreferredContrast preferred_contrast() const;
     CSS::PreferredMotion preferred_motion() const;
 
@@ -370,6 +371,7 @@ private:
     URL::URL m_last_find_in_page_url;
 
     bool m_listen_for_dom_mutations { false };
+    Optional<CSS::PreferredColorScheme> m_preferred_color_scheme_override_for_testing;
 
     struct PendingFullscreenEnter {
         GC::Ref<DOM::Element> element;
@@ -513,7 +515,8 @@ public:
 
     virtual void page_did_insert_clipboard_entry(Clipboard::SystemClipboardRepresentation const&, [[maybe_unused]] StringView presentation_style) { }
     virtual void page_did_request_clipboard_entries([[maybe_unused]] u64 request_id) { }
-    virtual void page_did_request_paste() { }
+    virtual void page_did_request_primary_paste() { }
+    virtual void page_did_update_primary_selection(String const&) { }
 
     virtual void page_did_change_audio_play_state(HTML::AudioPlayState) { }
 
@@ -528,6 +531,7 @@ public:
     virtual void close_worker_agent([[maybe_unused]] HTML::WorkerAgentId agent_id, [[maybe_unused]] HTML::WorkerAgentOwnerToken owner_token) { }
 
     virtual void page_did_mutate_dom([[maybe_unused]] FlyString const& type, [[maybe_unused]] DOM::Node const& target, [[maybe_unused]] DOM::NodeList& added_nodes, [[maybe_unused]] DOM::NodeList& removed_nodes, [[maybe_unused]] GC::Ptr<DOM::Node> previous_sibling, [[maybe_unused]] GC::Ptr<DOM::Node> next_sibling, [[maybe_unused]] Optional<String> const& attribute_name) { }
+    virtual void flush_pending_dom_mutations() { }
 
     virtual void page_did_take_screenshot(Gfx::ShareableBitmap const&) { }
 

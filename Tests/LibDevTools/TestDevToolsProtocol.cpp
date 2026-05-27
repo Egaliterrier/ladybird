@@ -57,6 +57,7 @@ static JsonObject make_dom_tree()
     JsonObject target = make_node(4, "element"sv, "DIV"sv);
     target.set("visible"sv, true);
     target.set("scrollable"sv, true);
+    target.set("display"sv, "grid"sv);
 
     JsonObject target_attributes;
     target_attributes.set("id"sv, "target"sv);
@@ -76,11 +77,16 @@ static JsonObject make_dom_tree()
     before.set("parent-id"sv, 4);
     before.set("pseudo-element"sv, to_underlying(Web::CSS::PseudoElement::Before));
 
+    JsonObject subgrid = make_node(9, "element"sv, "SECTION"sv);
+    subgrid.set("visible"sv, true);
+    subgrid.set("display"sv, "grid"sv);
+
     JsonArray target_children;
     target_children.must_append(move(text));
     target_children.must_append(move(comment));
     target_children.must_append(move(whitespace));
     target_children.must_append(move(before));
+    target_children.must_append(move(subgrid));
     target.set("children"sv, move(target_children));
 
     JsonObject sibling = make_node(8, "element"sv, "SPAN"sv);
@@ -175,6 +181,82 @@ static Web::CSS::StyleSheetIdentifier fixture_style_sheet()
         .rule_count = 2 };
 }
 
+static JsonObject make_grid_line(double start, i32 number, i32 negative_number)
+{
+    JsonObject line;
+    line.set("breadth"sv, 0);
+    line.set("names"sv, JsonArray {});
+    line.set("negativeNumber"sv, negative_number);
+    line.set("number"sv, number);
+    line.set("start"sv, start);
+    line.set("type"sv, "explicit"sv);
+    return line;
+}
+
+static JsonObject make_grid_track(double start, double breadth)
+{
+    JsonObject track;
+    track.set("breadth"sv, breadth);
+    track.set("start"sv, start);
+    track.set("state"sv, "static"sv);
+    track.set("type"sv, "explicit"sv);
+    return track;
+}
+
+static JsonObject make_grid_dimension()
+{
+    JsonArray lines;
+    lines.must_append(make_grid_line(0, 1, -2));
+    lines.must_append(make_grid_line(100, 2, -1));
+
+    JsonArray tracks;
+    tracks.must_append(make_grid_track(0, 100));
+
+    JsonObject dimension;
+    dimension.set("lines"sv, move(lines));
+    dimension.set("tracks"sv, move(tracks));
+    return dimension;
+}
+
+static JsonObject make_grid_layout(Web::UniqueNodeID container_node_id, StringView area_name, bool is_subgrid = false)
+{
+    JsonObject area;
+    area.set("columnEnd"sv, 2);
+    area.set("columnStart"sv, 1);
+    area.set("name"sv, area_name);
+    area.set("rowEnd"sv, 2);
+    area.set("rowStart"sv, 1);
+    area.set("type"sv, "explicit"sv);
+
+    JsonArray areas;
+    areas.must_append(move(area));
+
+    JsonObject fragment;
+    fragment.set("areas"sv, move(areas));
+    fragment.set("cols"sv, make_grid_dimension());
+    fragment.set("rows"sv, make_grid_dimension());
+
+    JsonArray fragments;
+    fragments.must_append(move(fragment));
+
+    JsonObject layout;
+    layout.set("containerNodeId"sv, container_node_id.value());
+    layout.set("direction"sv, "ltr"sv);
+    layout.set("gridFragments"sv, move(fragments));
+    layout.set("isSubgrid"sv, is_subgrid);
+    layout.set("writingMode"sv, "horizontal-tb"sv);
+    return layout;
+}
+
+static JsonArray make_grid_layouts()
+{
+    JsonArray grids;
+    grids.must_append(make_grid_layout(Web::UniqueNodeID { 4 }, "content"sv));
+    grids.must_append(make_grid_layout(Web::UniqueNodeID { 9 }, "subgrid"sv, true));
+    grids.must_append(make_grid_layout(Web::UniqueNodeID { 8 }, "subframe"sv));
+    return grids;
+}
+
 class TestDevToolsDelegate final : public DevTools::DevToolsDelegate {
 public:
     virtual Vector<DevTools::TabDescription> tab_list() const override
@@ -233,11 +315,44 @@ public:
     virtual void clear_inspected_dom_node(DevTools::TabDescription const&) const override { ++clear_inspected_dom_node_call_count; }
     virtual void clear_highlighted_dom_node(DevTools::TabDescription const&) const override { ++clear_highlighted_dom_node_call_count; }
 
+    virtual void inspect_grid_layouts(DevTools::TabDescription const&, Web::UniqueNodeID root_node_id, OnGridLayoutsReceived callback) const override
+    {
+        ++inspect_grid_layouts_call_count;
+        last_grid_root_node = root_node_id;
+        callback(make_grid_layouts());
+    }
+
+    virtual void inspect_current_grid(DevTools::TabDescription const&, Web::UniqueNodeID node_id, OnCurrentGridReceived callback) const override
+    {
+        ++inspect_current_grid_call_count;
+        last_current_grid_node = node_id;
+
+        if (node_id == Web::UniqueNodeID { 4 }) {
+            callback(make_grid_layout(node_id, "content"sv));
+            return;
+        }
+
+        callback({});
+    }
+
     virtual void highlight_dom_node(DevTools::TabDescription const&, Web::UniqueNodeID node_id, Optional<Web::CSS::PseudoElement> pseudo_element) const override
     {
         ++highlight_dom_node_call_count;
         last_highlighted_dom_node = node_id;
         last_highlighted_pseudo_element = pseudo_element;
+    }
+
+    virtual void highlight_grid(DevTools::TabDescription const&, Web::UniqueNodeID node_id, JsonValue options) const override
+    {
+        ++highlight_grid_call_count;
+        last_highlighted_grid_node = node_id;
+        last_grid_highlight_options = move(options);
+    }
+
+    virtual void clear_grid_highlight(DevTools::TabDescription const&, Web::UniqueNodeID node_id) const override
+    {
+        ++clear_grid_highlight_call_count;
+        last_cleared_grid_node = node_id;
     }
 
     virtual void listen_for_dom_mutations(DevTools::TabDescription const&, OnDOMMutationReceived callback) const override
@@ -484,8 +599,12 @@ public:
     mutable size_t stop_listening_for_dom_properties_call_count { 0 };
     mutable size_t inspect_dom_node_call_count { 0 };
     mutable size_t clear_inspected_dom_node_call_count { 0 };
+    mutable size_t inspect_grid_layouts_call_count { 0 };
+    mutable size_t inspect_current_grid_call_count { 0 };
     mutable size_t highlight_dom_node_call_count { 0 };
     mutable size_t clear_highlighted_dom_node_call_count { 0 };
+    mutable size_t highlight_grid_call_count { 0 };
+    mutable size_t clear_grid_highlight_call_count { 0 };
     mutable size_t listen_for_dom_mutations_call_count { 0 };
     mutable size_t stop_listening_for_dom_mutations_call_count { 0 };
     mutable size_t get_dom_node_inner_html_call_count { 0 };
@@ -516,6 +635,11 @@ public:
     mutable Optional<Web::CSS::PseudoElement> last_highlighted_pseudo_element;
     mutable Optional<Web::UniqueNodeID> last_inspected_dom_node;
     mutable Optional<Web::CSS::PseudoElement> last_inspected_pseudo_element;
+    mutable Optional<Web::UniqueNodeID> last_grid_root_node;
+    mutable Optional<Web::UniqueNodeID> last_current_grid_node;
+    mutable Optional<Web::UniqueNodeID> last_highlighted_grid_node;
+    mutable Optional<Web::UniqueNodeID> last_cleared_grid_node;
+    mutable JsonValue last_grid_highlight_options;
     mutable Optional<Web::UniqueNodeID> last_edited_node;
     mutable Optional<Web::UniqueNodeID> last_parent_node;
     mutable Optional<Web::UniqueNodeID> last_sibling_node;
@@ -862,6 +986,8 @@ TEST_CASE(inspector_walker_highlighter_layout_and_editing)
     EXPECT_EQ(children_response.get_array("nodes"sv)->size(), 1u);
 
     auto div_actor = query_selector(client, walker_actor, root_node_actor, "div"sv);
+    auto section_actor = query_selector(client, walker_actor, root_node_actor, "section"sv);
+    auto span_actor = query_selector(client, walker_actor, root_node_actor, "span"sv);
     JsonObject previous_sibling;
     previous_sibling.set("to"sv, walker_actor);
     previous_sibling.set("type"sv, "previousSibling"sv);
@@ -899,7 +1025,9 @@ TEST_CASE(inspector_walker_highlighter_layout_and_editing)
     second_highlighter_request.set("typeName"sv, "BoxModelHighlighter"sv);
     auto second_highlighter_response = client.request(move(second_highlighter_request));
     VERIFY(second_highlighter_response.has_object("highlighter"sv));
-    EXPECT_EQ(second_highlighter_response.get_object("highlighter"sv)->get_string("actor"sv).value(), highlighter_actor);
+    EXPECT_NE(
+        second_highlighter_response.get_object("highlighter"sv)->get_string("actor"sv).value(),
+        highlighter_actor);
 
     JsonObject show_highlighter;
     show_highlighter.set("to"sv, highlighter_actor);
@@ -916,8 +1044,116 @@ TEST_CASE(inspector_walker_highlighter_layout_and_editing)
     EXPECT(!client.request(move(show_unknown)).get_bool("value"sv).value());
     EXPECT_EQ(client.request(highlighter_actor, "hide"sv).get_string("from"sv).value(), highlighter_actor);
 
+    JsonObject grid_highlighter_request;
+    grid_highlighter_request.set("to"sv, inspector_actor);
+    grid_highlighter_request.set("type"sv, "getHighlighterByType"sv);
+    grid_highlighter_request.set("typeName"sv, "CssGridHighlighter"sv);
+    auto grid_highlighter_actor = client.request(move(grid_highlighter_request)).get_object("highlighter"sv)->get_string("actor"sv).release_value();
+
+    JsonObject second_grid_highlighter_request;
+    second_grid_highlighter_request.set("to"sv, inspector_actor);
+    second_grid_highlighter_request.set("type"sv, "getHighlighterByType"sv);
+    second_grid_highlighter_request.set("typeName"sv, "CssGridHighlighter"sv);
+    auto second_grid_highlighter_actor = client.request(move(second_grid_highlighter_request))
+                                             .get_object("highlighter"sv)
+                                             ->get_string("actor"sv)
+                                             .release_value();
+    EXPECT_NE(second_grid_highlighter_actor, grid_highlighter_actor);
+
+    JsonObject grid_options;
+    grid_options.set("showGridArea"sv, true);
+
+    JsonObject show_grid_highlighter;
+    show_grid_highlighter.set("to"sv, grid_highlighter_actor);
+    show_grid_highlighter.set("type"sv, "show"sv);
+    show_grid_highlighter.set("node"sv, div_actor);
+    show_grid_highlighter.set("options"sv, move(grid_options));
+    EXPECT(client.request(move(show_grid_highlighter)).get_bool("value"sv).value());
+    EXPECT_EQ(session->delegate.highlight_grid_call_count, 1u);
+    EXPECT_EQ(session->delegate.last_highlighted_grid_node.value(), 4u);
+    EXPECT(session->delegate.last_grid_highlight_options.as_object().get_bool("showGridArea"sv).value());
+    EXPECT_EQ(session->delegate.clear_grid_highlight_call_count, 0u);
+
+    JsonObject show_second_grid_highlighter;
+    show_second_grid_highlighter.set("to"sv, second_grid_highlighter_actor);
+    show_second_grid_highlighter.set("type"sv, "show"sv);
+    show_second_grid_highlighter.set("node"sv, span_actor);
+    EXPECT(client.request(move(show_second_grid_highlighter)).get_bool("value"sv).value());
+    EXPECT_EQ(session->delegate.clear_grid_highlight_call_count, 0u);
+    EXPECT_EQ(session->delegate.highlight_grid_call_count, 2u);
+    EXPECT_EQ(session->delegate.last_highlighted_grid_node.value(), 8u);
+
+    EXPECT_EQ(client.request(grid_highlighter_actor, "hide"sv).get_string("from"sv).value(), grid_highlighter_actor);
+    EXPECT_EQ(session->delegate.clear_grid_highlight_call_count, 1u);
+    EXPECT_EQ(session->delegate.last_cleared_grid_node.value(), 4u);
+
+    JsonObject retarget_second_grid_highlighter;
+    retarget_second_grid_highlighter.set("to"sv, second_grid_highlighter_actor);
+    retarget_second_grid_highlighter.set("type"sv, "show"sv);
+    retarget_second_grid_highlighter.set("node"sv, div_actor);
+    EXPECT(client.request(move(retarget_second_grid_highlighter)).get_bool("value"sv).value());
+    EXPECT_EQ(session->delegate.clear_grid_highlight_call_count, 2u);
+    EXPECT_EQ(session->delegate.last_cleared_grid_node.value(), 8u);
+    EXPECT_EQ(session->delegate.highlight_grid_call_count, 3u);
+    EXPECT_EQ(session->delegate.last_highlighted_grid_node.value(), 4u);
+
+    EXPECT_EQ(client.request(second_grid_highlighter_actor, "release"sv).get_string("from"sv).value(), second_grid_highlighter_actor);
+    EXPECT_EQ(session->delegate.clear_grid_highlight_call_count, 3u);
+    EXPECT_EQ(session->delegate.last_cleared_grid_node.value(), 4u);
+
     auto layout_actor = client.request(walker_actor, "getLayoutInspector"sv).get_object("actor"sv)->get_string("actor"sv).release_value();
-    EXPECT(client.request(layout_actor, "getGrids"sv).get_array("grids"sv)->is_empty());
+
+    JsonObject get_grids;
+    get_grids.set("to"sv, layout_actor);
+    get_grids.set("type"sv, "getGrids"sv);
+    get_grids.set("rootNode"sv, root_node_actor);
+    auto grids = client.request(move(get_grids)).get_array("grids"sv).release_value();
+    EXPECT_EQ(session->delegate.inspect_grid_layouts_call_count, 1u);
+    EXPECT_EQ(session->delegate.last_grid_root_node.value(), 1u);
+    EXPECT_EQ(grids.size(), 3u);
+
+    auto const& content_grid = grids.at(0).as_object();
+    EXPECT(!content_grid.has("containerNodeId"sv));
+    EXPECT(content_grid.has_string("actor"sv));
+    EXPECT_EQ(content_grid.get_string("containerNodeActorID"sv).value(), div_actor);
+    EXPECT_EQ(content_grid.get_string("direction"sv).value(), "ltr"sv);
+    EXPECT_EQ(content_grid.get_string("writingMode"sv).value(), "horizontal-tb"sv);
+    EXPECT_EQ(content_grid.get_bool("isSubgrid"sv).value(), false);
+    auto const& content_grid_fragment = content_grid.get_array("gridFragments"sv)->at(0).as_object();
+    EXPECT_EQ(content_grid_fragment.get_array("areas"sv)->at(0).as_object().get_string("name"sv).value(), "content"sv);
+    EXPECT_EQ(content_grid_fragment.get_object("cols"sv)->get_array("lines"sv)->at(0).as_object().get_integer<i32>("negativeNumber"sv).value(), -2);
+
+    auto const& subgrid = grids.at(1).as_object();
+    EXPECT_EQ(subgrid.get_string("containerNodeActorID"sv).value(), section_actor);
+    EXPECT_EQ(subgrid.get_bool("isSubgrid"sv).value(), true);
+    EXPECT_EQ(subgrid.get_array("gridFragments"sv)->at(0).as_object().get_array("areas"sv)->at(0).as_object().get_string("name"sv).value(), "subgrid"sv);
+
+    JsonObject get_parent_grid_node;
+    get_parent_grid_node.set("to"sv, walker_actor);
+    get_parent_grid_node.set("type"sv, "getParentGridNode"sv);
+    get_parent_grid_node.set("node"sv, section_actor);
+    EXPECT_EQ(client.request(move(get_parent_grid_node)).get_object("node"sv)->get_string("actor"sv).value(), div_actor);
+
+    JsonObject get_missing_parent_grid_node;
+    get_missing_parent_grid_node.set("to"sv, walker_actor);
+    get_missing_parent_grid_node.set("type"sv, "getParentGridNode"sv);
+    get_missing_parent_grid_node.set("node"sv, div_actor);
+    EXPECT(client.request(move(get_missing_parent_grid_node)).get("node"sv).value().is_null());
+
+    auto const& subframe_grid = grids.at(2).as_object();
+    EXPECT_EQ(subframe_grid.get_string("containerNodeActorID"sv).value(), span_actor);
+    EXPECT_EQ(subframe_grid.get_array("gridFragments"sv)->at(0).as_object().get_array("areas"sv)->at(0).as_object().get_string("name"sv).value(), "subframe"sv);
+
+    JsonObject get_current_grid;
+    get_current_grid.set("to"sv, layout_actor);
+    get_current_grid.set("type"sv, "getCurrentGrid"sv);
+    get_current_grid.set("node"sv, div_actor);
+    auto current_grid = client.request(move(get_current_grid)).get_object("grid"sv).release_value();
+    EXPECT_EQ(session->delegate.inspect_current_grid_call_count, 1u);
+    EXPECT_EQ(session->delegate.last_current_grid_node.value(), 4u);
+    EXPECT_EQ(current_grid.get_string("actor"sv).value(), content_grid.get_string("actor"sv).value());
+    EXPECT_EQ(current_grid.get_string("containerNodeActorID"sv).value(), div_actor);
+
     EXPECT(client.request(layout_actor, "getCurrentFlexbox"sv).get("flexbox"sv).value().is_null());
 
     JsonObject set_outer_html;

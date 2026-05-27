@@ -31,13 +31,6 @@ void CompositorConnection::set_presentation_mode(Web::Compositor::CompositorCont
     async_set_presentation_mode(context_id, presentation_mode);
 }
 
-void CompositorConnection::stop_presenting_to_client(Web::Compositor::CompositorContextId context_id)
-{
-    if (!can_send_message_to_compositor())
-        return;
-    async_stop_presenting_to_client(context_id);
-}
-
 void CompositorConnection::destroy_context(Web::Compositor::CompositorContextId context_id)
 {
     if (!can_send_message_to_compositor())
@@ -45,12 +38,12 @@ void CompositorConnection::destroy_context(Web::Compositor::CompositorContextId 
     async_destroy_context(context_id);
 }
 
-void CompositorConnection::update_display_list(Web::Compositor::CompositorContextId context_id, NonnullRefPtr<Web::Painting::DisplayList> const& display_list, Web::Painting::DisplayListResourceTransaction const& resource_transaction, Web::Painting::ScrollStateSnapshot const& scroll_state_snapshot)
+void CompositorConnection::update_display_list(Web::Compositor::CompositorContextId context_id, NonnullRefPtr<Web::Painting::DisplayList> const& display_list, Web::Painting::AccumulatedVisualContextTree const& visual_context_tree, Web::Painting::DisplayListResourceTransaction const& resource_transaction, Web::Painting::ScrollStateSnapshot const& scroll_state_snapshot)
 {
     if (!can_send_message_to_compositor())
         return;
 
-    auto encoded_message = MUST(Messages::CompositorWebContentServer::UpdateDisplayList::static_encode(context_id, display_list, resource_transaction, scroll_state_snapshot));
+    auto encoded_message = MUST(Messages::CompositorWebContentServer::UpdateDisplayList::static_encode(context_id, display_list, visual_context_tree, resource_transaction, scroll_state_snapshot));
     if (post_message(encoded_message).is_error())
         did_lose_compositor();
 }

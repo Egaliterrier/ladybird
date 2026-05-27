@@ -674,6 +674,8 @@ void Document::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_hovered_node);
     visitor.visit(m_inspected_node);
     visitor.visit(m_highlighted_node);
+    for (auto const& grid_highlight : m_grid_highlights)
+        visitor.visit(grid_highlight.node);
     visitor.visit(m_active_favicon);
     visitor.visit(m_browsing_context);
     visitor.visit(m_focused_area);
@@ -1382,13 +1384,38 @@ Color Document::background_color() const
 
 Color Document::canvas_background_color() const
 {
+    return CSS::SystemColor::canvas(canvas_color_scheme()).blend(background_color());
+}
+
+CSS::PreferredColorScheme Document::canvas_color_scheme() const
+{
     auto color_scheme = CSS::PreferredColorScheme::Light;
+    auto root_color_scheme_is_normal = true;
+    auto root_color_scheme_was_computed = false;
     if (auto* html_element = this->html_element(); html_element && html_element->layout_node()) {
-        if (html_element->layout_node()->computed_values().color_scheme() == CSS::PreferredColorScheme::Dark)
+        root_color_scheme_was_computed = true;
+        auto const& computed_values = html_element->layout_node()->computed_values();
+        auto const& color_scheme_value = html_element->computed_properties()->property(CSS::PropertyID::ColorScheme).as_color_scheme();
+        root_color_scheme_is_normal = color_scheme_value.schemes().is_empty();
+        if (computed_values.color_scheme() == CSS::PreferredColorScheme::Dark) {
             color_scheme = CSS::PreferredColorScheme::Dark;
+        } else if (root_color_scheme_is_normal && m_supported_color_schemes.has_value()) {
+            auto preferred_color_scheme = page().preferred_color_scheme();
+            if (m_supported_color_schemes->contains_slow(CSS::preferred_color_scheme_to_string(preferred_color_scheme)))
+                color_scheme = preferred_color_scheme;
+        }
     }
 
-    return CSS::SystemColor::canvas(color_scheme).blend(background_color());
+    if (color_scheme == CSS::PreferredColorScheme::Light
+        && !root_color_scheme_was_computed
+        && root_color_scheme_is_normal
+        && !m_supported_color_schemes.has_value()
+        && readiness() == HTML::DocumentReadyState::Loading) {
+        if (auto navigable = this->navigable(); navigable && navigable->is_top_level_traversable())
+            color_scheme = page().preferred_color_scheme();
+    }
+
+    return color_scheme;
 }
 
 Vector<CSS::BackgroundLayerData> const* Document::background_layers() const
@@ -1724,8 +1751,11 @@ void Document::update_layout(UpdateLayoutReason reason)
         return;
 
     VERIFY(!m_is_running_update_layout);
-    ScopeGuard guard = [&] { m_is_running_update_layout = false; };
     m_is_running_update_layout = true;
+    ScopeGuard guard = [&] {
+        m_is_running_update_layout = false;
+        page().client().flush_pending_dom_mutations();
+    };
 
     auto needs_style_update_after_layout = [&] {
         return !m_query_containers_needing_container_query_evaluation_after_layout.is_empty()
@@ -2487,10 +2517,25 @@ Optional<Vector<String> const&> Document::supported_color_schemes() const
     return m_supported_color_schemes;
 }
 
+void Document::set_supported_color_schemes(Vector<String> supported_color_schemes)
+{
+    set_supported_color_schemes(Optional<Vector<String>> { move(supported_color_schemes) });
+}
+
+void Document::set_supported_color_schemes(Optional<Vector<String>> supported_color_schemes)
+{
+    if (m_supported_color_schemes == supported_color_schemes)
+        return;
+
+    m_supported_color_schemes = move(supported_color_schemes);
+    invalidate_style(StyleInvalidationReason::SettingsChange);
+    set_needs_media_query_evaluation();
+}
+
 // https://html.spec.whatwg.org/multipage/semantics.html#meta-color-scheme
 void Document::obtain_supported_color_schemes()
 {
-    m_supported_color_schemes = {};
+    Optional<Vector<String>> supported_color_schemes;
 
     // 1. Let candidate elements be the list of all meta elements that meet the following criteria, in tree order:
     for_each_in_subtree_of_type<HTML::HTMLMetaElement>([&](HTML::HTMLMetaElement& element) {
@@ -2507,7 +2552,7 @@ void Document::obtain_supported_color_schemes()
 
             // 2. If parsed is a valid CSS 'color-scheme' property value, then return parsed.
             if (!parsed.is_null() && parsed->is_color_scheme()) {
-                m_supported_color_schemes = parsed->as_color_scheme().schemes();
+                supported_color_schemes = parsed->as_color_scheme().schemes();
                 return TraversalDecision::Break;
             }
         }
@@ -2516,6 +2561,7 @@ void Document::obtain_supported_color_schemes()
     });
 
     // 3. Return null.
+    set_supported_color_schemes(move(supported_color_schemes));
 }
 
 // https://html.spec.whatwg.org/multipage/semantics.html#meta-theme-color
@@ -2605,6 +2651,44 @@ void Document::set_highlighted_node(GC::Ptr<Node> node, Optional<CSS::PseudoElem
 
     if (auto layout_node = highlighted_layout_node(); layout_node && layout_node->first_paintable())
         layout_node->first_paintable()->set_needs_repaint();
+}
+
+void Document::set_grid_highlighted_node(GC::Ptr<Node> node, Painting::GridInspectorOverlayOptions options)
+{
+    if (!node)
+        return;
+
+    for (auto& grid_highlight : m_grid_highlights) {
+        if (grid_highlight.node != node)
+            continue;
+
+        grid_highlight.options = options;
+        node->set_needs_repaint();
+        return;
+    }
+
+    m_grid_highlights.append({ node, options });
+    node->set_needs_repaint();
+}
+
+void Document::clear_grid_highlighted_node(GC::Ptr<Node> node)
+{
+    if (!node) {
+        for (auto const& grid_highlight : m_grid_highlights) {
+            if (grid_highlight.node)
+                grid_highlight.node->set_needs_repaint();
+        }
+        m_grid_highlights.clear();
+        return;
+    }
+
+    auto old_size = m_grid_highlights.size();
+    m_grid_highlights.remove_all_matching([&](auto const& grid_highlight) {
+        return grid_highlight.node == node;
+    });
+
+    if (m_grid_highlights.size() != old_size)
+        node->set_needs_repaint();
 }
 
 GC::Ptr<Layout::Node> Document::highlighted_layout_node()
@@ -8239,15 +8323,11 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
     VERIFY(paintable());
 
     auto display_list = Painting::DisplayList::create(paintable()->visual_context_tree());
-    Painting::DisplayListRecorder display_list_recorder(display_list, resource_storage);
+    Painting::DisplayListRecorder display_list_recorder(display_list, paintable()->visual_context_tree(), resource_storage);
 
     // https://drafts.csswg.org/css-color-adjust-1/#color-scheme-effect
     // On the root element, the used color scheme additionally must affect the surface color of the canvas, and the viewport’s scrollbars.
-    auto color_scheme = CSS::PreferredColorScheme::Light;
-    if (auto* html_element = this->html_element(); html_element && html_element->layout_node()) {
-        if (html_element->layout_node()->computed_values().color_scheme() == CSS::PreferredColorScheme::Dark)
-            color_scheme = CSS::PreferredColorScheme::Dark;
-    }
+    auto color_scheme = canvas_color_scheme();
 
     // .. in the case of embedded documents typically rendered over a transparent canvas
     // (such as provided via an HTML iframe element), if the used color scheme of the element
@@ -8293,6 +8373,16 @@ RefPtr<Painting::DisplayList> Document::record_display_list(HTML::PaintConfig co
 
     if (highlighted_node() && highlighted_node()->paintable()) {
         highlighted_node()->paintable()->paint_inspector_overlay(context);
+    }
+
+    for (auto const& grid_highlight : m_grid_highlights) {
+        if (!grid_highlight.node)
+            continue;
+        auto paintable = grid_highlight.node->paintable();
+        auto const* paintable_box = as_if<Painting::PaintableBox>(paintable.ptr());
+        if (!paintable_box)
+            continue;
+        paintable_box->paint_grid_inspector_overlay(context, grid_highlight.options);
     }
 
     return display_list;
@@ -8648,7 +8738,7 @@ String Document::dump_display_list()
     StringBuilder builder;
     builder.append("AccumulatedVisualContext Tree:\n"sv);
 
-    auto const& visual_context_tree = display_list->visual_context_tree();
+    auto const& visual_context_tree = viewport_paintable->visual_context_tree();
     HashTable<size_t> visited;
     HashMap<size_t, Vector<size_t>> children;
     Vector<size_t> root_contexts;

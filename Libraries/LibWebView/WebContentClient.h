@@ -119,6 +119,8 @@ private:
     virtual void did_get_source(u64 page_id, URL::URL, URL::URL, String) override;
     virtual void did_inspect_dom_tree(u64 page_id, String) override;
     virtual void did_inspect_dom_node(u64 page_id, DOMNodeProperties) override;
+    virtual void did_inspect_grid_layouts(u64 page_id, String) override;
+    virtual void did_inspect_current_grid(u64 page_id, String) override;
     virtual void did_inspect_accessibility_tree(u64 page_id, String) override;
     virtual void did_get_hovered_node_id(u64 page_id, Web::UniqueNodeID node_id) override;
     virtual void did_finish_editing_dom_node(u64 page_id, Optional<Web::UniqueNodeID> node_id) override;
@@ -182,7 +184,8 @@ private:
     virtual void did_change_background_color(u64 page_id, Gfx::Color color) override;
     virtual void did_insert_clipboard_entry(u64 page_id, Web::Clipboard::SystemClipboardRepresentation, String presentation_style) override;
     virtual void did_request_clipboard_entries(u64 page_id, u64 request_id) override;
-    virtual void did_request_paste(u64 page_id) override;
+    virtual void did_request_primary_paste(u64 page_id) override;
+    virtual void did_update_primary_selection(u64 page_id, String) override;
     virtual void did_change_audio_play_state(u64 page_id, Web::HTML::AudioPlayState) override;
     virtual void did_update_navigation_buttons_state(u64 page_id, bool back_enabled, bool forward_enabled) override;
     virtual Messages::WebContentClient::StartWorkerAgentResponse start_worker_agent(u64 page_id, Web::HTML::WorkerAgentStartRequest request) override;
