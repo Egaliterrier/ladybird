@@ -60,12 +60,13 @@ public:
     void mouse_down(double x, double y, WebIDL::UnsignedShort click_count, WebIDL::UnsignedShort button, WebIDL::UnsignedShort modifiers);
     void mouse_up(double x, double y, WebIDL::UnsignedShort button, WebIDL::UnsignedShort modifiers);
     void mouse_move(double x, double y, WebIDL::UnsignedShort modifiers);
+    void mouse_leave();
 
     // High-level mouse conveniences
     void click(double x, double y, WebIDL::UnsignedShort click_count, WebIDL::UnsignedShort button, WebIDL::UnsignedShort modifiers);
     void click_and_hold(double x, double y, WebIDL::UnsignedShort click_count, WebIDL::UnsignedShort button, WebIDL::UnsignedShort modifiers);
     GC::Ref<WebIDL::Promise> wheel(double x, double y, double delta_x, double delta_y);
-    void pinch(double x, double y, double scale_delta);
+    void pinch(double x, double y, double scale_delta, WebIDL::UnsignedShort modifiers);
 
     String current_cursor();
 

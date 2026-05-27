@@ -350,6 +350,11 @@ void Internals::mouse_move(double x, double y, WebIDL::UnsignedShort modifiers)
     page.handle_mousemove(position, position, 0, modifiers);
 }
 
+void Internals::mouse_leave()
+{
+    this->page().handle_mouseleave();
+}
+
 void Internals::click(double x, double y, WebIDL::UnsignedShort click_count, WebIDL::UnsignedShort button, WebIDL::UnsignedShort modifiers)
 {
     click_and_hold(x, y, click_count, button, modifiers);
@@ -383,11 +388,11 @@ GC::Ref<WebIDL::Promise> Internals::wheel(double x, double y, double delta_x, do
     return promise;
 }
 
-void Internals::pinch(double x, double y, double scale_delta)
+void Internals::pinch(double x, double y, double scale_delta, WebIDL::UnsignedShort modifiers)
 {
     auto& page = this->page();
     auto position = page.css_to_device_point({ x, y });
-    page.handle_pinch_event(position, scale_delta);
+    page.handle_pinch_event(position, modifiers, scale_delta);
 }
 
 String Internals::current_cursor()

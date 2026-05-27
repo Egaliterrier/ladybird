@@ -35,12 +35,13 @@ interface Internals {
     undefined mouseDown(double x, double y, optional unsigned short clickCount = 1, optional unsigned short button = 0, optional unsigned short modifiers = 0);
     undefined mouseUp(double x, double y, optional unsigned short button = 0, optional unsigned short modifiers = 0);
     undefined mouseMove(double x, double y, optional unsigned short modifiers = 0);
+    undefined mouseLeave();
 
     // High-level mouse conveniences
     undefined click(double x, double y, optional unsigned short clickCount = 1, optional unsigned short button = 0, optional unsigned short modifiers = 0);
     undefined clickAndHold(double x, double y, optional unsigned short clickCount = 1, optional unsigned short button = 0, optional unsigned short modifiers = 0);
     Promise<undefined> wheel(double x, double y, double deltaX, double deltaY);
-    undefined pinch(double x, double y, double scaleDelta);
+    undefined pinch(double x, double y, double scaleDelta, optional unsigned short modifiers = 0);
 
     DOMString currentCursor();
 
