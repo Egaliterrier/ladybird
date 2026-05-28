@@ -125,7 +125,6 @@ public:
     bool potentially_playing() const;
     GC::Ref<WebIDL::Promise> play();
     void pause();
-    void toggle_playback();
 
     double volume() const { return m_volume; }
     WebIDL::ExceptionOr<void> set_volume(double);
@@ -369,6 +368,8 @@ private:
 
     bool m_running_time_update_event_handler { false };
     Optional<MonotonicTime> m_last_time_update_event_time;
+
+    Optional<MonotonicTime> m_last_progress_event_time;
 
     GC::Ptr<DOM::DocumentObserver> m_document_observer;
 
