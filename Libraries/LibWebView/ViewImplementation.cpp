@@ -480,6 +480,11 @@ void ViewImplementation::inspect_current_grid(Web::UniqueNodeID node_id)
     client().async_inspect_current_grid(page_id(), node_id);
 }
 
+void ViewImplementation::inspect_current_flexbox(Web::UniqueNodeID node_id, bool only_look_at_parents)
+{
+    client().async_inspect_current_flexbox(page_id(), node_id, only_look_at_parents);
+}
+
 void ViewImplementation::clear_inspected_dom_node()
 {
     client().async_clear_inspected_dom_node(page_id());
@@ -493,6 +498,16 @@ void ViewImplementation::highlight_dom_node(Web::UniqueNodeID node_id, Optional<
 void ViewImplementation::clear_highlighted_dom_node()
 {
     highlight_dom_node(0, {});
+}
+
+void ViewImplementation::highlight_flexbox(Web::UniqueNodeID node_id, JsonValue options)
+{
+    client().async_highlight_flexbox(page_id(), node_id, move(options));
+}
+
+void ViewImplementation::clear_flexbox_highlight(Web::UniqueNodeID node_id)
+{
+    client().async_clear_flexbox_highlight(page_id(), node_id);
 }
 
 void ViewImplementation::highlight_grid(Web::UniqueNodeID node_id, JsonValue options)

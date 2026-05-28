@@ -1800,6 +1800,22 @@ void Application::inspect_current_grid(DevTools::TabDescription const& descripti
     view->inspect_current_grid(node_id);
 }
 
+void Application::inspect_current_flexbox(DevTools::TabDescription const& description, Web::UniqueNodeID node_id, bool only_look_at_parents, OnCurrentFlexboxReceived on_current_flexbox_received) const
+{
+    auto view = ViewImplementation::find_view_by_id(description.id);
+    if (!view.has_value()) {
+        on_current_flexbox_received({});
+        return;
+    }
+
+    view->on_received_current_flexbox = [&view = *view, on_current_flexbox_received = move(on_current_flexbox_received)](Optional<JsonObject> flexbox_layout) {
+        view.on_received_current_flexbox = nullptr;
+        on_current_flexbox_received(move(flexbox_layout));
+    };
+
+    view->inspect_current_flexbox(node_id, only_look_at_parents);
+}
+
 void Application::clear_inspected_dom_node(DevTools::TabDescription const& description) const
 {
     if (auto view = ViewImplementation::find_view_by_id(description.id); view.has_value())
@@ -1816,6 +1832,18 @@ void Application::clear_highlighted_dom_node(DevTools::TabDescription const& des
 {
     if (auto view = ViewImplementation::find_view_by_id(description.id); view.has_value())
         view->clear_highlighted_dom_node();
+}
+
+void Application::highlight_flexbox(DevTools::TabDescription const& description, Web::UniqueNodeID node_id, JsonValue options) const
+{
+    if (auto view = ViewImplementation::find_view_by_id(description.id); view.has_value())
+        view->highlight_flexbox(node_id, move(options));
+}
+
+void Application::clear_flexbox_highlight(DevTools::TabDescription const& description, Web::UniqueNodeID node_id) const
+{
+    if (auto view = ViewImplementation::find_view_by_id(description.id); view.has_value())
+        view->clear_flexbox_highlight(node_id);
 }
 
 void Application::highlight_grid(DevTools::TabDescription const& description, Web::UniqueNodeID node_id, JsonValue options) const
