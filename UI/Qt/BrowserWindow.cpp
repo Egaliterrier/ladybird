@@ -23,6 +23,7 @@
 #include <UI/Qt/StringUtils.h>
 #include <UI/Qt/TabBar.h>
 #include <UI/Qt/WebContentView.h>
+#include <UI/Qt/WindowControlButton.h>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -30,6 +31,7 @@
 #include <QApplication>
 #include <QCursor>
 #include <QGuiApplication>
+#include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -225,11 +227,13 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
 
     m_hamburger_menu = new QMenu(this);
 
-    if (!Settings::the()->show_menubar())
-        menuBar()->hide();
+    menuBar()->setObjectName("LadybirdMenuBar");
+    create_menu_bar_window_controls();
+    update_menu_bar_style();
+    update_menu_bar_visibility(Settings::the()->show_menubar());
 
     QObject::connect(Settings::the(), &Settings::show_menubar_changed, this, [this](bool show_menubar) {
-        menuBar()->setVisible(show_menubar);
+        update_menu_bar_visibility(show_menubar);
     });
 
     auto* file_menu = menuBar()->addMenu("&File");
@@ -251,13 +255,11 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     update_reopen_recently_closed_action();
 
     auto* close_current_tab_action = new QAction("&Close Current Tab", this);
-    close_current_tab_action->setIcon(load_icon_from_uri("resource://icons/16x16/close-tab.png"sv));
     close_current_tab_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Close));
     m_hamburger_menu->addAction(close_current_tab_action);
     file_menu->addAction(close_current_tab_action);
 
     auto* open_file_action = new QAction("&Open File...", this);
-    open_file_action->setIcon(load_icon_from_uri("resource://icons/16x16/filetype-folder-open.png"sv));
     open_file_action->setShortcut(QKeySequence(QKeySequence::StandardKey::Open));
     m_hamburger_menu->addAction(open_file_action);
     file_menu->addAction(open_file_action);
@@ -267,14 +269,13 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     auto* edit_menu = m_hamburger_menu->addMenu("&Edit");
     menuBar()->addMenu(edit_menu);
 
-    edit_menu->addAction(create_application_action(*this, Application::the().cut_selection_action()));
-    edit_menu->addAction(create_application_action(*this, Application::the().copy_selection_action()));
-    edit_menu->addAction(create_application_action(*this, Application::the().paste_action()));
-    edit_menu->addAction(create_application_action(*this, Application::the().select_all_action()));
+    edit_menu->addAction(create_application_action(*this, Application::the().cut_selection_action(), IncludeActionIcon::No));
+    edit_menu->addAction(create_application_action(*this, Application::the().copy_selection_action(), IncludeActionIcon::No));
+    edit_menu->addAction(create_application_action(*this, Application::the().paste_action(), IncludeActionIcon::No));
+    edit_menu->addAction(create_application_action(*this, Application::the().select_all_action(), IncludeActionIcon::No));
     edit_menu->addSeparator();
 
     m_find_in_page_action = new QAction("&Find in Page...", this);
-    m_find_in_page_action->setIcon(load_icon_from_uri("resource://icons/16x16/find.png"sv));
     m_find_in_page_action->setShortcuts(QKeySequence::keyBindings(QKeySequence::StandardKey::Find));
 
     auto find_previous_shortcuts = QKeySequence::keyBindings(QKeySequence::StandardKey::FindPrevious);
@@ -295,7 +296,7 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     QObject::connect(m_find_in_page_action, &QAction::triggered, this, &BrowserWindow::show_find_in_page);
 
     edit_menu->addSeparator();
-    edit_menu->addAction(create_application_action(*edit_menu, Application::the().open_settings_page_action()));
+    edit_menu->addAction(create_application_action(*edit_menu, Application::the().open_settings_page_action(), IncludeActionIcon::No));
 
     auto* view_menu = m_hamburger_menu->addMenu("&View");
     menuBar()->addMenu(view_menu);
@@ -343,7 +344,7 @@ BrowserWindow::BrowserWindow(Vector<URL::URL> const& initial_urls, IsPopupWindow
     auto* help_menu = m_hamburger_menu->addMenu("&Help");
     menuBar()->addMenu(help_menu);
 
-    help_menu->addAction(create_application_action(*help_menu, Application::the().open_about_page_action()));
+    help_menu->addAction(create_application_action(*help_menu, Application::the().open_about_page_action(), IncludeActionIcon::No));
 
     m_hamburger_menu->addSeparator();
     file_menu->addSeparator();
@@ -775,6 +776,80 @@ void BrowserWindow::update_tab_close_button_icons()
     }
 }
 
+void BrowserWindow::create_menu_bar_window_controls()
+{
+    m_menu_bar_window_controls = new QWidget(menuBar());
+    m_menu_bar_window_controls->setObjectName("LadybirdMenuBarWindowControls");
+
+    auto* layout = new QHBoxLayout(m_menu_bar_window_controls);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    m_menu_bar_minimize_window_button = new WindowControlButton("LadybirdWindowButton", "Minimize", { 16, 16 }, { 40, 30 }, m_menu_bar_window_controls);
+    m_menu_bar_maximize_window_button = new WindowControlButton("LadybirdWindowButton", "Maximize", { 16, 16 }, { 40, 30 }, m_menu_bar_window_controls);
+    m_menu_bar_close_window_button = new WindowControlButton("LadybirdCloseWindowButton", "Close", { 16, 16 }, { 40, 30 }, m_menu_bar_window_controls);
+
+    layout->addWidget(m_menu_bar_minimize_window_button);
+    layout->addWidget(m_menu_bar_maximize_window_button);
+    layout->addWidget(m_menu_bar_close_window_button);
+
+    menuBar()->setCornerWidget(m_menu_bar_window_controls, Qt::TopRightCorner);
+
+    connect(m_menu_bar_minimize_window_button, &QToolButton::clicked, this, [this] {
+        showMinimized();
+    });
+    connect(m_menu_bar_maximize_window_button, &QToolButton::clicked, this, [this] {
+        toggle_window_maximized();
+    });
+    connect(m_menu_bar_close_window_button, &QToolButton::clicked, this, [this] {
+        close();
+    });
+
+    update_menu_bar_window_control_icons();
+}
+
+void BrowserWindow::update_menu_bar_style()
+{
+    menuBar()->setStyleSheet(ChromeStyle::menu_bar_style_sheet(palette()));
+}
+
+void BrowserWindow::update_menu_bar_visibility(bool show_menubar)
+{
+    menuBar()->setVisible(show_menubar);
+    if (m_menu_bar_window_controls)
+        m_menu_bar_window_controls->setVisible(show_menubar);
+    m_tabs_container->set_window_controls_visible(!show_menubar);
+}
+
+void BrowserWindow::update_menu_bar_window_control_icons()
+{
+    if (!m_menu_bar_minimize_window_button || !m_menu_bar_maximize_window_button || !m_menu_bar_close_window_button)
+        return;
+
+    auto is_maximized = this->isMaximized();
+    m_menu_bar_minimize_window_button->setIcon(create_chrome_icon(ChromeIcon::WindowMinimize, palette()));
+    m_menu_bar_maximize_window_button->setIcon(create_chrome_icon(is_maximized ? ChromeIcon::WindowRestore : ChromeIcon::WindowMaximize, palette()));
+    m_menu_bar_maximize_window_button->setToolTip(is_maximized ? "Restore" : "Maximize");
+    m_menu_bar_close_window_button->setIcon(create_chrome_icon(ChromeIcon::WindowClose, palette()));
+}
+
+void BrowserWindow::toggle_window_maximized()
+{
+    if (isMaximized())
+        showNormal();
+    else
+        showMaximized();
+    update_menu_bar_window_control_icons();
+}
+
+bool BrowserWindow::start_window_move()
+{
+    auto* handle = windowHandle();
+    if (!handle)
+        return false;
+    return handle->startSystemMove();
+}
+
 void BrowserWindow::tab_audio_play_state_changed(int index, Web::HTML::AudioPlayState play_state)
 {
     auto* tab = m_tabs_container->tab(index);
@@ -946,14 +1021,11 @@ bool BrowserWindow::eventFilter(QObject* object, QEvent* event)
             update_resize_cursor(position);
         else
             clear_resize_cursor();
-    } else if (event->type() != QEvent::MouseButtonPress) {
+    } else if (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseButtonDblClick) {
         return QMainWindow::eventFilter(object, event);
     }
 
-    if (event->type() != QEvent::MouseButtonPress)
-        return QMainWindow::eventFilter(object, event);
-
-    if (isMaximized() || isFullScreen())
+    if (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseButtonDblClick)
         return QMainWindow::eventFilter(object, event);
 
     if (is_button)
@@ -963,15 +1035,26 @@ bool BrowserWindow::eventFilter(QObject* object, QEvent* event)
     if (mouse_event->button() != Qt::LeftButton)
         return QMainWindow::eventFilter(object, event);
 
-    auto edges = resize_edges_for_position(widget->mapTo(this, mouse_event->position().toPoint()));
-    if (edges == Qt::Edges {})
+    auto position = widget->mapTo(this, mouse_event->position().toPoint());
+    if (event->type() == QEvent::MouseButtonPress && !isMaximized() && !isFullScreen()) {
+        auto edges = resize_edges_for_position(position);
+        auto* handle = windowHandle();
+        if (edges != Qt::Edges {} && handle && handle->startSystemResize(edges))
+            return true;
+    }
+
+    if (isFullScreen() || widget != menuBar() || menuBar()->actionAt(mouse_event->position().toPoint()) != nullptr)
         return QMainWindow::eventFilter(object, event);
 
-    auto* handle = windowHandle();
-    if (!handle || !handle->startSystemResize(edges))
-        return QMainWindow::eventFilter(object, event);
+    if (event->type() == QEvent::MouseButtonDblClick) {
+        toggle_window_maximized();
+        return true;
+    }
 
-    return true;
+    if (start_window_move())
+        return true;
+
+    return QMainWindow::eventFilter(object, event);
 }
 
 Qt::Edges BrowserWindow::resize_edges_for_position(QPoint const& position) const
@@ -1050,8 +1133,12 @@ void BrowserWindow::resizeEvent(QResizeEvent* event)
 void BrowserWindow::changeEvent(QEvent* event)
 {
     if (event->type() == QEvent::PaletteChange) {
+        update_menu_bar_style();
+        update_menu_bar_window_control_icons();
         update_tab_close_button_icons();
     } else if (event->type() == QEvent::WindowStateChange) {
+        update_menu_bar_window_control_icons();
+
         QWindowStateChangeEvent* stateChangeEvent = static_cast<QWindowStateChangeEvent*>(event);
         bool was_fullscreen = stateChangeEvent->oldState() & Qt::WindowFullScreen;
         bool is_fullscreen = windowState() & Qt::WindowFullScreen;

@@ -13,6 +13,7 @@
 #include <UI/Qt/Icon.h>
 #include <UI/Qt/Tab.h>
 #include <UI/Qt/TabBar.h>
+#include <UI/Qt/WindowControlButton.h>
 
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -489,36 +490,20 @@ TabWidget::TabWidget(QWidget* parent)
 
     m_new_tab_button = new QToolButton(this);
     m_new_tab_button->setObjectName("LadybirdNewTabButton");
-    m_new_tab_button->setIconSize(QSize(18, 18));
+    m_new_tab_button->setIconSize(QSize(20, 20));
     m_new_tab_button->setFixedSize(32, 32);
     m_new_tab_button->setFocusPolicy(Qt::NoFocus);
     m_new_tab_button->setToolTip("New Tab");
 
-    m_minimize_window_button = new QToolButton(this);
-    m_minimize_window_button->setObjectName("LadybirdWindowButton");
-    m_minimize_window_button->setToolTip("Minimize");
-    m_minimize_window_button->setIconSize(QSize(18, 18));
-    m_minimize_window_button->setFixedSize(40, 40);
-    m_minimize_window_button->setFocusPolicy(Qt::NoFocus);
-
-    m_maximize_window_button = new QToolButton(this);
-    m_maximize_window_button->setObjectName("LadybirdWindowButton");
-    m_maximize_window_button->setIconSize(QSize(18, 18));
-    m_maximize_window_button->setFixedSize(40, 40);
-    m_maximize_window_button->setFocusPolicy(Qt::NoFocus);
-
-    m_close_window_button = new QToolButton(this);
-    m_close_window_button->setObjectName("LadybirdCloseWindowButton");
-    m_close_window_button->setToolTip("Close");
-    m_close_window_button->setIconSize(QSize(18, 18));
-    m_close_window_button->setFixedSize(40, 40);
-    m_close_window_button->setFocusPolicy(Qt::NoFocus);
+    m_minimize_window_button = new WindowControlButton("LadybirdWindowButton", "Minimize", { 18, 18 }, { 40, 40 }, this);
+    m_maximize_window_button = new WindowControlButton("LadybirdWindowButton", "Maximize", { 18, 18 }, { 40, 40 }, this);
+    m_close_window_button = new WindowControlButton("LadybirdCloseWindowButton", "Close", { 18, 18 }, { 40, 40 }, this);
 
     recreate_icons();
 
     auto* tab_bar_row_layout = new QHBoxLayout();
     tab_bar_row_layout->setSpacing(4);
-    tab_bar_row_layout->setContentsMargins(12, 3, 8, 1);
+    tab_bar_row_layout->setContentsMargins(12, 3, 4, 1);
     tab_bar_row_layout->addWidget(m_tab_bar);
     tab_bar_row_layout->addWidget(m_new_tab_button, 0, Qt::AlignVCenter);
     tab_bar_row_layout->addStretch(1);
@@ -625,6 +610,14 @@ void TabWidget::set_new_tab_action(QAction* action)
     connect(m_new_tab_button, &QToolButton::clicked, action, &QAction::trigger);
 }
 
+void TabWidget::set_window_controls_visible(bool visible)
+{
+    m_minimize_window_button->setVisible(visible);
+    m_maximize_window_button->setVisible(visible);
+    m_close_window_button->setVisible(visible);
+    update_tab_layout();
+}
+
 bool TabWidget::event(QEvent* event)
 {
     if (auto type = event->type(); type == QEvent::MouseButtonRelease) {
@@ -724,7 +717,14 @@ void TabWidget::resizeEvent(QResizeEvent* event)
 
 void TabWidget::update_tab_layout()
 {
-    auto controls_width = m_new_tab_button->width() + m_minimize_window_button->width() + m_maximize_window_button->width() + m_close_window_button->width();
+    auto controls_width = m_new_tab_button->width();
+    if (m_minimize_window_button->isVisible())
+        controls_width += m_minimize_window_button->width();
+    if (m_maximize_window_button->isVisible())
+        controls_width += m_maximize_window_button->width();
+    if (m_close_window_button->isVisible())
+        controls_width += m_close_window_button->width();
+
     auto available_for_tabs = width() - controls_width - 36;
 
     m_tab_bar->set_available_width(available_for_tabs);
@@ -778,7 +778,7 @@ TabBarButton::TabBarButton(QIcon const& icon, QWidget* parent)
 {
     setObjectName("LadybirdTabButton");
     setFixedSize({ 22, 22 });
-    setIconSize({ 14, 14 });
+    setIconSize({ 16, 16 });
     setFocusPolicy(Qt::NoFocus);
     setFlat(true);
 }
