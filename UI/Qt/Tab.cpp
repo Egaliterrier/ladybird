@@ -96,6 +96,7 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
 
     auto view_initial_state = WebContentViewInitialState {
         .maximum_frames_per_second = window->refresh_rate(),
+        .display_id = window->display_id(),
     };
 
     m_view = new WebContentView(this, parent_client, page_index, AK::move(view_initial_state));
@@ -104,7 +105,7 @@ Tab::Tab(BrowserWindow* window, RefPtr<WebView::WebContentClient> parent_client,
 
     m_toolbar_container = new QWidget(this);
     m_toolbar_container->setObjectName("LadybirdToolbarContainer");
-    m_toolbar_container->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
+    m_toolbar_container->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
     m_toolbar = new QWidget(this);
     m_toolbar->setObjectName("LadybirdNavigationToolbar");
