@@ -1,0 +1,189 @@
+name: Windows Build
+
+on:
+  push:
+    branches: [ windows ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 240
+    permissions:
+      contents: write
+
+    env:
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "10G"
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Visual Studio environment
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          echo "VCINSTALLDIR=%VCINSTALLDIR%" >> %GITHUB_ENV%
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup
+        with:
+          os: 'Windows'
+          arch: 'x86_64'
+          toolchain: 'ClangCL'
+          type: 'build'
+
+      - name: Restore Caches
+        id: cache-restore
+        uses: ./.github/actions/cache-restore
+        with:
+          os: 'Windows'
+          arch: 'x86_64'
+          toolchain: 'ClangCL'
+          cache_key_extra: 'NORMAL'
+          ccache_path: '${{ github.workspace }}/.ccache'
+          vcpkg_cache_path: '${{ github.workspace }}/vcpkg_cache'
+
+      - name: Restore build directory cache
+        id: build-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: Build/release
+          key: build-release-${{ hashFiles('CMakeLists.txt', '**/CMakeLists.txt', 'vcpkg.json') }}
+          restore-keys: |
+            build-release-
+
+      - name: Setup Windows Specific Tools
+        shell: pwsh
+        run: |
+          if (!(Get-Command pkg-config -ErrorAction SilentlyContinue)) {
+            choco install pkgconfiglite -y --no-progress
+          }
+          if (!(Test-Path "${{ github.workspace }}/vcpkg_cache")) {
+            New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/vcpkg_cache"
+          }
+
+      - name: Configure CMake (if cache miss)
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cmake --preset Release -B Build/release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DLADYBIRD_GUI_FRAMEWORK=Qt `
+            -DCMAKE_LINKER_TYPE=lld `
+            -DENABLE_LTO_FOR_RELEASE=OFF
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build Build/release --config Release --parallel $env:NUMBER_OF_PROCESSORS -- -k 0
+
+      - name: Package
+        if: success()
+        shell: pwsh
+        run: |
+          $pkgDir = "ladybird-package/Ladybird"
+          New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+          cmake --install Build/release --prefix $pkgDir --strip --config Release
+          Copy-Item "Build/release/bin/*.exe" -Destination "$pkgDir/bin/" -Force
+          Copy-Item "Build/release/bin/*.dll" -Destination "$pkgDir/bin/" -Force
+          $vcpkgBin = "Build/release/vcpkg_installed/x64-windows/bin"
+          if (Test-Path $vcpkgBin) {
+            Copy-Item "$vcpkgBin/*.dll" -Destination "$pkgDir/bin/" -Force
+          }
+          $shareSource = "Build/release/share"
+          if (Test-Path $shareSource) {
+            Copy-Item -Path $shareSource -Destination "$pkgDir/" -Recurse -Force
+          }
+          $deployTool = Get-ChildItem -Path "Build/release/vcpkg_installed" -Filter "windeployqt.exe" -Recurse | Select-Object -First 1 -ExpandProperty FullName
+          if (!$deployTool) { exit 1 }
+          $ladybirdExe = "$pkgDir/bin/Ladybird.exe"
+          if (!(Test-Path $ladybirdExe)) { exit 1 }
+          & $deployTool --no-translations --compiler-runtime --ignore-library-errors --dir "$pkgDir/bin" "$ladybirdExe"
+          Remove-Item -Path "$pkgDir/bin/vc_redist.x64.exe" -Force -ErrorAction SilentlyContinue
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" -Destination "$pkgDir/LICENSE.txt" }
+          "Commit: ${{ github.sha }}`nBuild Date: $(Get-Date)" | Out-File -FilePath "$pkgDir/version.txt"
+
+          # Updater script – YAML‑safe, no here‑string
+          $updater = @(
+            '<# :',
+            '@echo off',
+            'setlocal',
+            'echo Checking for updates...',
+            'powershell -noprofile -executionpolicy bypass -command "iex ((Get-Content ''%~f0'') -join \"`n\")"',
+            'pause',
+            'goto :EOF',
+            '#>',
+            '$ProgressPreference = ''Continue''',
+            '$ErrorActionPreference = ''Stop''',
+            'if (Get-Process Ladybird -ErrorAction SilentlyContinue) { exit 1 }',
+            '$localCommit = (Select-String -Path version.txt -Pattern ''Commit: ([a-f0-9]+)'').Matches.Groups[1].Value',
+            '$headers = @{ "User-Agent" = "Ladybird-Windows-Updater" }',
+            '$release = (Invoke-RestMethod -Uri ''https://api.github.com/repos/AtiDev17/ladybird/releases'' -Headers $headers)[0]',
+            '$remoteCommit = if ($release.body -match ''Commit: ([a-f0-9]+)'') { $matches[1] } else { ''unknown'' }',
+            'if ($localCommit -eq $remoteCommit) { Write-Host "Up to date."; exit 0 }',
+            '$asset = $release.assets | Where-Object { $_.name -eq ''ladybird-windows-x64.zip'' }',
+            'if (!$asset) { exit 1 }',
+            '$tmp = Join-Path $env:TEMP ''LadybirdUpdate''',
+            'Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue',
+            'New-Item -Type Directory $tmp | Out-Null',
+            'Start-BitsTransfer -Source $asset.browser_download_url -Destination "$tmp\update.zip"',
+            'Expand-Archive -Path "$tmp\update.zip" -DestinationPath $tmp -Force',
+            'Copy-Item -Path "$tmp\Ladybird\*" -Destination ''.'' -Recurse -Force',
+            'Remove-Item $tmp -Recurse -Force',
+            'Write-Host "Update successful!"'
+          ) -join "`r`n"
+          $updater | Out-File -FilePath "$pkgDir/Update Ladybird.bat" -Encoding ASCII
+
+          Compress-Archive -Path "ladybird-package/Ladybird" -DestinationPath "ladybird-windows-x64.zip" -Force
+          (Get-FileHash -Path "ladybird-windows-x64.zip" -Algorithm SHA256).Hash | Out-File -FilePath "ladybird-windows-x64.zip.sha256" -Encoding ASCII
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v7
+        if: success()
+        with:
+          name: ladybird-windows-x64
+          path: ladybird-windows-x64.zip
+          retention-days: 14
+
+      - name: Validate Build
+        if: success()
+        shell: pwsh
+        run: |
+          $binDir = "${{ github.workspace }}/ladybird-package/Ladybird/bin"
+          $pkgDir = "${{ github.workspace }}/ladybird-package/Ladybird"
+          if (!(Test-Path "$binDir/platforms/qwindows.dll")) { exit 1 }
+          if (!(Test-Path "$pkgDir/share/Lagom/themes/Default.ini")) { exit 1 }
+          $proc = Start-Process -FilePath "$binDir/Ladybird.exe" -ArgumentList "--headless","about:blank" -PassThru -NoNewWindow
+          if (-not $proc.WaitForExit(15000)) { Stop-Process -Id $proc.Id -Force; exit 1 }
+          if ($proc.ExitCode -ne 0) { exit 1 }
+
+      - name: Save caches
+        uses: ./.github/actions/cache-save
+        if: always()
+        with:
+          arch: 'x86_64'
+          ccache_path: '${{ github.workspace }}/.ccache'
+          ccache_primary_key: ${{ steps.cache-restore.outputs.ccache_primary_key }}
+          vcpkg_cache_path: '${{ github.workspace }}/vcpkg_cache'
+          vcpkg_cache_primary_key: ${{ steps.cache-restore.outputs.vcpkg_cache_primary_key }}
+
+      - name: Save build directory cache
+        uses: actions/cache/save@v5
+        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        with:
+          path: Build/release
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
